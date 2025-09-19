@@ -1,0 +1,215 @@
+from crewai.flow.flow import Flow, listen, start
+from crewai import Agent, Task
+from dotenv import load_dotenv
+from litellm import completion
+
+load_dotenv()
+
+
+class SupervisorFlow(Flow):
+    model = "gpt-4o-mini"
+
+    def __init__(self):
+        super().__init__()
+        # Initialize agents
+        self.greeter_agent = Agent(
+            role="Greeter and Intent Analyzer",
+            goal="Greet users and determine what resources they want to create",
+            backstory="You are a friendly assistant that helps users specify what automation tasks they need",
+            verbose=True,
+        )
+
+        self.collector_agent = Agent(
+            role="Information Collector",
+            goal="Collect required information from users for resource creation",
+            backstory="You are responsible for gathering all necessary inputs from users step by step",
+            verbose=True,
+        )
+
+    @start()
+    def greeter(self):
+        """Greets user and gathers their request intelligently"""
+        print("Starting supervisor flow")
+        print(f"Flow State ID: {self.state['id']}")
+
+        # Create a task that asks for user intent
+        greeter_task = Task(
+            description="""Greet the user and ask what they want to create. 
+            
+            Say: "Hello! I can help you create:
+            1. GitHub repositories
+            2. Databricks schemas  
+            3. Databricks compute clusters
+            
+            What would you like to create today?"
+            
+            Then analyze their response and determine their intent.
+            Respond with one of: github_repo, databricks_schema, databricks_compute, multiple, or unclear""",
+            expected_output="User's intent (github_repo, databricks_schema, databricks_compute, multiple, or unclear)",
+            agent=self.greeter_agent,
+            human_input=True,  # Enable human input
+        )
+
+        # Execute the task (this will pause for human input)
+        result = greeter_task.execute_sync()
+        intent = str(result).strip().lower()
+
+        # Store in flow state
+        self.state["intent"] = intent
+        print(f"Detected intent: {intent}")
+
+        return {"intent": intent}
+
+    @listen(greeter)
+    def repo_collector(self, greeter_output):
+        """Collects GitHub repository information from user"""
+        intent = greeter_output["intent"]
+
+        if "github_repo" in intent or "multiple" in intent:
+            print("Collecting GitHub repository information...")
+
+            # Create task for collecting repo information
+            repo_task = Task(
+                description="""Collect GitHub repository information from the user step by step.
+                
+                Ask for these inputs one by one:
+                1. Repository name (use_case_name)
+                2. Repository template to use
+                3. Internal team name
+                4. Development team name  
+                5. Additional team (or 'none')
+                
+                Format your final response as:
+                use_case_name: [value]
+                template: [value]
+                internal_team: [value]
+                development_team: [value]
+                additional_team: [value]""",
+                expected_output="Formatted GitHub repository configuration",
+                agent=self.collector_agent,
+                human_input=True,
+            )
+
+            result = repo_task.execute_sync()
+
+            # Parse the result into a dict
+            repo_data = self._parse_config_result(str(result))
+            self.state["repo_data"] = repo_data
+            print(f"Collected repo data: {repo_data}")
+
+            return repo_data
+        else:
+            print("Skipping repo collection - not requested")
+            return None
+
+    @listen(greeter)
+    def schema_collector(self, greeter_output):
+        """Collects Databricks schema information from user"""
+        intent = greeter_output["intent"]
+
+        if "databricks_schema" in intent or "multiple" in intent:
+            print("Collecting Databricks schema information...")
+
+            schema_task = Task(
+                description="""Collect Databricks schema information from the user step by step.
+                
+                Ask for these inputs one by one:
+                1. Databricks catalog name
+                2. Schema name within the catalog
+                3. AI/ML support team
+                4. Use case name for tagging
+                5. Business owner contact
+                6. Internal Azure AD group
+                7. External Azure AD group
+                
+                Format your final response as:
+                catalog: [value]
+                schema: [value]  
+                aiml_support_team: [value]
+                aiml_use_case: [value]
+                business_owner: [value]
+                internal_entra_id_group: [value]
+                external_entra_id_group: [value]""",
+                expected_output="Formatted Databricks schema configuration",
+                agent=self.collector_agent,
+                human_input=True,
+            )
+
+            result = schema_task.execute_sync()
+
+            schema_data = self._parse_config_result(str(result))
+            self.state["schema_data"] = schema_data
+            print(f"Collected schema data: {schema_data}")
+
+            return schema_data
+        else:
+            print("Skipping schema collection - not requested")
+            return None
+
+    @listen(greeter)
+    def compute_collector(self, greeter_output):
+        """Collects Databricks compute information from user"""
+        intent = greeter_output["intent"]
+
+        if "databricks_compute" in intent or "multiple" in intent:
+            print("Collecting Databricks compute information...")
+
+            compute_task = Task(
+                description="""Collect Databricks compute information from the user step by step.
+                
+                Ask for these inputs one by one:
+                1. Compute cluster name
+                2. Apache Spark version
+                3. Driver node instance type
+                4. Worker node instance type  
+                5. Minimum number of worker nodes
+                6. Maximum number of worker nodes
+                7. Security mode for data access
+                8. Use case name for tagging (default to cluster name if not provided)
+                
+                Format your final response as:
+                cluster_name: [value]
+                spark_version: [value]
+                driver_node_type_id: [value]
+                node_type_id: [value]
+                min_workers: [value]
+                max_workers: [value]
+                data_security_mode: [value]
+                aiml_use_case: [value]""",
+                expected_output="Formatted Databricks compute configuration",
+                agent=self.collector_agent,
+                human_input=True,
+            )
+
+            result = compute_task.execute_sync()
+
+            compute_data = self._parse_config_result(str(result))
+            self.state["compute_data"] = compute_data
+            print(f"Collected compute data: {compute_data}")
+
+            return compute_data
+        else:
+            print("Skipping compute collection - not requested")
+            return None
+
+    def _parse_config_result(self, result_text: str) -> dict:
+        """Parse task result into a dictionary"""
+        data = {}
+        lines = result_text.split("\n")
+
+        for line in lines:
+            if ":" in line:
+                key, value = line.split(":", 1)
+                data[key.strip()] = value.strip()
+
+        return data
+
+
+# Example usage:
+if __name__ == "__main__":
+    flow = SupervisorFlow()
+    flow.plot()
+    result = flow.kickoff()
+
+    print("Flow completed!")
+    print(f"Final state: {flow.state}")
