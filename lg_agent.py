@@ -47,11 +47,12 @@ class SupervisorState(TypedDict):
     retry_count: int
     prompt: str
     current_step: str
-    # New fields for GitHub requirements
+    # GitHub requirements
     github_requirements: dict
     current_requirement: str
     validation_result: bool
     requirement_retry_count: int
+    confirmation_step: str
 
 
 class SupervisorGraph:
@@ -238,6 +239,171 @@ class SupervisorGraph:
         user_input = state.get("user_request", "")
         retry_count = state.get("requirement_retry_count", 0)
 
+        if state.get("current_step") == "github_confirmation":
+            confirmation_step = state.get("confirmation_step", "")
+
+            if confirmation_step == "awaiting_confirmation":
+                user_response = user_input.strip().lower()
+
+                if user_response in ["yes", "y", "yeah", "sure", "ok", "okay", "fine"]:
+                    # User confirmed - complete the flow
+                    final_summary = "🎉 GitHub repository requirements confirmed!\n\n📋 FINAL SUMMARY:\n"
+                    for req, value in github_requirements.items():
+                        final_summary += f"• {req.replace('_', ' ').title()}: {value}\n"
+                    final_summary += "\n✅ Ready to proceed with repository creation!"
+
+                    return {
+                        "github_requirements": github_requirements,
+                        "current_step": "github_requirements_complete",
+                        "prompt": final_summary,
+                    }
+
+                elif user_response in ["no", "n", "nope", "not really"]:
+                    # User wants to make changes
+                    prompt = (
+                        "Which field would you like to update?\n"
+                        "Available fields: use_case_name, template, internal_team, development_team, additional_team\n"
+                        "Please specify the field name:"
+                    )
+
+                    return {
+                        "current_step": "github_confirmation",
+                        "confirmation_step": "field_selection",
+                        "prompt": prompt,
+                    }
+                else:
+                    # Invalid confirmation response
+                    prompt = "Please respond with 'yes' if you're satisfied with the requirements, or 'no' if you'd like to make changes:"
+                    return {
+                        "current_step": "github_confirmation",
+                        "confirmation_step": "awaiting_confirmation",
+                        "prompt": prompt,
+                    }
+
+            elif confirmation_step == "field_selection":
+                # User specified which field to update
+                field_to_update = user_input.strip().lower().replace(" ", "_")
+
+                if field_to_update in requirements_order:
+                    # Valid field - ask for new value
+                    req_config = requirements_config[field_to_update]
+                    prompt = f"Current value for {field_to_update.replace('_', ' ').title()}: {github_requirements.get(field_to_update, 'Not set')}\n\n"
+                    prompt += f"Please provide the new value:\n{req_config['prompt']}"
+
+                    return {
+                        "current_step": "github_confirmation",
+                        "confirmation_step": "updating_field",
+                        "current_requirement": field_to_update,  # Reuse this field
+                        "prompt": prompt,
+                        "requirement_retry_count": 0,
+                    }
+                else:
+                    # Invalid field
+                    prompt = (
+                        "Invalid field name. Please choose from:\n"
+                        f"{', '.join([f.replace('_', ' ').title() for f in requirements_order])}"
+                    )
+
+                    return {
+                        "current_step": "github_confirmation",
+                        "confirmation_step": "field_selection",
+                        "prompt": prompt,
+                    }
+
+            elif confirmation_step == "updating_field":
+                # User provided new value for the field
+                field_to_update = current_requirement
+                req_config = requirements_config[field_to_update]
+
+                # Validate the new value (reuse existing validation logic)
+                is_valid = False
+                validated_value = ""
+
+                if req_config.get("validation") == "any_text":
+                    if user_input.strip():
+                        is_valid = True
+                        validated_value = user_input.strip()
+                else:
+                    response = completion(
+                        model=self.model,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": f"""
+                            Question: {req_config['prompt']}
+                            User Input: "{user_input}"
+                            Valid Options: {req_config['valid_options']}
+                            
+                            Task: Validate if the user input matches any valid option (case-insensitive).
+                            
+                            Respond with EXACTLY one of:
+                            - If valid: return the exact valid option (lowercase)
+                            - If invalid: return "INVALID"
+                            """,
+                            }
+                        ],
+                    )
+
+                    validation_result = (
+                        response["choices"][0]["message"]["content"].strip().lower()
+                    )
+
+                    if (
+                        validation_result != "invalid"
+                        and validation_result in req_config["valid_options"]
+                    ):
+                        is_valid = True
+                        validated_value = validation_result
+
+                if is_valid:
+                    # Update the requirement and show updated summary
+                    github_requirements[field_to_update] = validated_value
+
+                    summary = (
+                        f"✅ Updated {field_to_update.replace('_', ' ').title()} to: {validated_value}\n\n"
+                        "📋 UPDATED SUMMARY:\n"
+                    )
+                    for req, value in github_requirements.items():
+                        summary += f"• {req.replace('_', ' ').title()}: {value}\n"
+
+                    summary += (
+                        "\n🔍 Are you satisfied with these requirements now? (yes/no)\n"
+                    )
+                    summary += "If no, please specify which field you'd like to update."
+
+                    return {
+                        "github_requirements": github_requirements,
+                        "current_step": "github_confirmation",
+                        "confirmation_step": "awaiting_confirmation",
+                        "prompt": summary,
+                    }
+                else:
+                    # Invalid new value
+                    retry_count = state.get("requirement_retry_count", 0) + 1
+
+                    if retry_count >= 2:
+                        prompt = f"❌ Multiple invalid attempts. Going back to confirmation.\n\nCurrent requirements:\n"
+                        for req, value in github_requirements.items():
+                            prompt += f"• {req.replace('_', ' ').title()}: {value}\n"
+                        prompt += (
+                            "\nAre you satisfied with these requirements? (yes/no)"
+                        )
+
+                        return {
+                            "current_step": "github_confirmation",
+                            "confirmation_step": "awaiting_confirmation",
+                            "prompt": prompt,
+                            "requirement_retry_count": 0,
+                        }
+                    else:
+                        prompt = f"❌ Invalid input: '{user_input}'\n\nPlease try again:\n{req_config['prompt']}"
+                        return {
+                            "current_step": "github_confirmation",
+                            "confirmation_step": "updating_field",
+                            "prompt": prompt,
+                            "requirement_retry_count": retry_count,
+                        }
+
         # If no current requirement, start with first
         if not current_requirement:
             current_requirement = requirements_order[0]
@@ -317,16 +483,18 @@ class SupervisorGraph:
                         "current_step": "github_requirements",
                     }
                 else:
-                    # All requirements collected
-                    summary = (
-                        "✅ All GitHub repository requirements collected!\n\nSummary:\n"
-                    )
+                    # All requirements collected - SHOW CONFIRMATION INSTEAD OF COMPLETING
+                    summary = "✅ All GitHub repository requirements collected!\n\n📋 SUMMARY:\n"
                     for req, value in github_requirements.items():
                         summary += f"• {req.replace('_', ' ').title()}: {value}\n"
 
+                    summary += "\n🔍 Please review the above details. Are you satisfied with these requirements? (yes/no)\n"
+                    summary += "If no, please specify which field you'd like to update."
+
                     return {
                         "github_requirements": github_requirements,
-                        "current_step": "github_requirements_complete",
+                        "current_step": "github_confirmation",  # NEW STEP
+                        "confirmation_step": "awaiting_confirmation",
                         "prompt": summary,
                     }
             else:
@@ -373,20 +541,24 @@ class SupervisorGraph:
             return "continue_requirements"
 
     def route_from_human(self, state: SupervisorState) -> str:
-        """Route from human node based on current step"""
+        """Route from human node based on current step - UPDATED"""
         current_step = state.get("current_step", "")
 
         if current_step == "github_requirements":
+            return "github_requirements"
+        elif current_step == "github_confirmation":  # NEW: Handle confirmation step
             return "github_requirements"
         else:
             return "intent_analyzer"
 
     def route_github_requirements(self, state: SupervisorState) -> str:
-        """Simple routing for GitHub requirements"""
+        """Enhanced routing for GitHub requirements including confirmation"""
         current_step = state.get("current_step", "")
 
         if current_step == "github_requirements_complete":
             return "complete"
+        elif current_step == "github_confirmation":
+            return "continue"  # Stay in the loop for confirmation workflow
         elif current_step == "confirm_back_to_menu":
             user_input = state.get("user_request", "").strip().lower()
             if user_input in ["yes", "y", "yeah", "sure"]:
