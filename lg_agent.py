@@ -1,3 +1,4 @@
+import asyncio
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.constants import START
@@ -9,16 +10,31 @@ import uuid
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.types import interrupt, Command
 
+
 load_dotenv()
 
-# client = MultiServerMCPClient(
-#     {
-#         "command": "python",
-#         "args": "/Users/mayurgd/Documents/CodingSpace/aiops_infra_automation/servers/aiops_automation_server.py",
-#         "transport": "stdio",
-#     }
-# )
-# tools = client.get_tools()
+client = MultiServerMCPClient(
+    {
+        "automation": {
+            "command": "python",
+            "args": [
+                "/Users/mayurgd/Documents/CodingSpace/aiops_infra_automation/servers/aiops_automation_server.py"
+            ],
+            "transport": "stdio",
+        }
+    }
+)
+
+
+async def get_tools_async():
+    tools = await client.get_tools()
+    return tools
+
+
+def get_tools():
+    tools = asyncio.run(get_tools_async())
+    return tools
+
 
 LOCAL = True
 
@@ -42,6 +58,7 @@ class SupervisorGraph:
     def __init__(self):
         self.model = "gpt-4o-mini"
         self.max_retries = 3
+        self.tools = get_tools()
 
     def human_node(self, state: SupervisorState) -> SupervisorState:
         """Handle human input using LangGraph's interrupt mechanism"""
@@ -145,98 +162,15 @@ class SupervisorGraph:
 
         return {"current_step": "completed", "intent": intent}
 
-    def github_requirements_node(self, state: SupervisorState) -> SupervisorState:
-        """Gather GitHub repository requirements iteratively"""
-
-        # Define requirements and their validation options
-        requirements_config = {
-            "use_case_name": {
-                "prompt": "What is the name of the use case for the repository?",
-                "validation": None,  # Any string is valid
-            },
-            "template": {
-                "prompt": "Which template would you like to use?\nOptions: npus-aiml-mlops-stacks-template, npus-aiml-skinny-dab-template",
-                "valid_options": [
-                    "npus-aiml-mlops-stacks-template",
-                    "npus-aiml-skinny-dab-template",
-                ],
-            },
-            "internal_team": {
-                "prompt": "What is the internal team name?\nOptions: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger",
-                "valid_options": [
-                    "eai",
-                    "deloitte",
-                    "sig",
-                    "tredence",
-                    "bora",
-                    "genpact",
-                    "tiger",
-                    "srm",
-                    "kroger",
-                ],
-            },
-            "development_team": {
-                "prompt": "What is the development team name?\nOptions: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger, none",
-                "valid_options": [
-                    "eai",
-                    "deloitte",
-                    "sig",
-                    "tredence",
-                    "bora",
-                    "genpact",
-                    "tiger",
-                    "srm",
-                    "kroger",
-                    "none",
-                ],
-            },
-            "additional_team": {
-                "prompt": "What is the additional team?\nOptions: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger, none",
-                "valid_options": [
-                    "eai",
-                    "deloitte",
-                    "sig",
-                    "tredence",
-                    "bora",
-                    "genpact",
-                    "tiger",
-                    "srm",
-                    "kroger",
-                    "none",
-                ],
-            },
-        }
-
-        github_requirements = state.get("github_requirements", {})
-        current_requirement = state.get("current_requirement", "")
-
-        # If no current requirement, start with the first one
-        if not current_requirement:
-            current_requirement = "use_case_name"
-            prompt = f"Let's gather the requirements for your GitHub repository.\n\n{requirements_config[current_requirement]['prompt']}"
-            return {
-                "prompt": prompt,
-                "current_step": "github_requirements",
-                "current_requirement": current_requirement,
-                "github_requirements": github_requirements,
-                "requirement_retry_count": 0,
-            }
-
-        return {
-            "current_step": "github_requirements",
-            "current_requirement": current_requirement,
-            "github_requirements": github_requirements,
-        }
-
-    def github_requirement_validator_node(
+    def github_requirements_collector_node(
         self, state: SupervisorState
     ) -> SupervisorState:
-        """Validate GitHub requirement input using LLM"""
+        """Single node to collect all GitHub requirements with validation"""
 
         requirements_config = {
             "use_case_name": {
                 "prompt": "What is the name of the use case for the repository?",
-                "validation": None,
+                "validation": "any_text",  # Any non-empty text
             },
             "template": {
                 "prompt": "Which template would you like to use?\nOptions: npus-aiml-mlops-stacks-template, npus-aiml-skinny-dab-template",
@@ -290,66 +224,6 @@ class SupervisorGraph:
                 ],
             },
         }
-
-        user_input = state["user_request"]
-        current_requirement = state["current_requirement"]
-        github_requirements = state.get("github_requirements", {}).copy()
-        requirement_retry_count = state.get("requirement_retry_count", 0)
-
-        # Get requirement config
-        req_config = requirements_config[current_requirement]
-
-        # For use_case_name, any non-empty string is valid
-        if current_requirement == "use_case_name":
-            if user_input.strip():
-                github_requirements[current_requirement] = user_input.strip()
-                is_valid = True
-            else:
-                is_valid = False
-        else:
-            # For other requirements, validate using LLM
-            response = completion(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"""User input: "{user_input}"
-                                    Valid options: {req_config['valid_options']}
-
-                                    IMPORTANT: Respond with EXACTLY one of these options (no quotes, no extra text):
-                                    - If the user input matches any of the valid options (case-insensitive), respond with the EXACT valid option
-                                    - If the user input doesn't match any valid option, respond with: INVALID
-
-                                    Examples:
-                                    User: "eai" -> eai
-                                    User: "EAI" -> eai  
-                                    User: "Deloitte" -> deloitte
-                                    User: "xyz" -> INVALID""",
-                    }
-                ],
-            )
-
-            validated_response = (
-                response["choices"][0]["message"]["content"].strip().lower()
-            )
-
-            if (
-                validated_response != "invalid"
-                and validated_response in req_config["valid_options"]
-            ):
-                github_requirements[current_requirement] = validated_response
-                is_valid = True
-            else:
-                is_valid = False
-
-        return {
-            "github_requirements": github_requirements,
-            "requirement_retry_count": requirement_retry_count,
-            "validation_result": is_valid,
-        }
-
-    def github_requirement_next_node(self, state: SupervisorState) -> SupervisorState:
-        """Move to next requirement or complete"""
 
         requirements_order = [
             "use_case_name",
@@ -358,82 +232,124 @@ class SupervisorGraph:
             "development_team",
             "additional_team",
         ]
-        requirements_config = {
-            "use_case_name": {
-                "prompt": "What is the name of the use case for the repository?"
-            },
-            "template": {
-                "prompt": "Which template would you like to use?\nOptions: npus-aiml-mlops-stacks-template, npus-aiml-skinny-dab-template"
-            },
-            "internal_team": {
-                "prompt": "What is the internal team name?\nOptions: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger"
-            },
-            "development_team": {
-                "prompt": "What is the development team name?\nOptions: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger, none"
-            },
-            "additional_team": {
-                "prompt": "What is the additional team?\nOptions: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger, none"
-            },
-        }
 
-        current_requirement = state["current_requirement"]
-        github_requirements = state["github_requirements"]
+        github_requirements = state.get("github_requirements", {})
+        current_requirement = state.get("current_requirement", "")
+        user_input = state.get("user_request", "")
+        retry_count = state.get("requirement_retry_count", 0)
 
-        # Find next requirement
-        current_index = requirements_order.index(current_requirement)
-
-        if current_index < len(requirements_order) - 1:
-            next_requirement = requirements_order[current_index + 1]
-            prompt = f"Great! Next requirement:\n\n{requirements_config[next_requirement]['prompt']}"
-
+        # If no current requirement, start with first
+        if not current_requirement:
+            current_requirement = requirements_order[0]
+            prompt = f"Let's gather the GitHub repository requirements.\n\n{requirements_config[current_requirement]['prompt']}"
             return {
                 "prompt": prompt,
-                "current_requirement": next_requirement,
+                "current_step": "github_requirements",
+                "current_requirement": current_requirement,
                 "requirement_retry_count": 0,
             }
-        else:
-            # All requirements gathered
-            summary = "All requirements gathered successfully!\n\nSummary:\n"
-            for req, value in github_requirements.items():
-                summary += f"- {req}: {value}\n"
 
-            return {"current_step": "github_requirements_complete", "prompt": summary}
+        # If we have user input, validate it
+        if user_input:
+            req_config = requirements_config[current_requirement]
+            is_valid = False
+            validated_value = ""
 
-    def github_requirement_retry_node(self, state: SupervisorState) -> SupervisorState:
-        """Handle retries for invalid requirement inputs"""
+            if req_config.get("validation") == "any_text":
+                # For use_case_name, any non-empty string is valid
+                if user_input.strip():
+                    is_valid = True
+                    validated_value = user_input.strip()
+            else:
+                # Use LLM for validation with single call
+                response = completion(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": f"""
+                        Question: {req_config['prompt']}
+                        User Input: "{user_input}"
+                        Valid Options: {req_config['valid_options']}
+                        
+                        Task: Validate if the user input matches any valid option (case-insensitive).
+                        
+                        Respond with EXACTLY one of:
+                        - If valid: return the exact valid option (lowercase)
+                        - If invalid: return "INVALID"
+                        
+                        Examples:
+                        Input "EAI" with options ["eai", "sig"] → "eai"
+                        Input "xyz" with options ["eai", "sig"] → "INVALID"
+                        """,
+                        }
+                    ],
+                )
 
-        requirements_config = {
-            "use_case_name": {
-                "prompt": "What is the name of the use case for the repository?"
-            },
-            "template": {
-                "prompt": "Which template would you like to use?\nOptions: npus-aiml-mlops-stacks-template, npus-aiml-skinny-dab-template"
-            },
-            "internal_team": {
-                "prompt": "What is the internal team name?\nOptions: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger"
-            },
-            "development_team": {
-                "prompt": "What is the development team name?\nOptions: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger, none"
-            },
-            "additional_team": {
-                "prompt": "What is the additional team?\nOptions: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger, none"
-            },
-        }
+                validation_result = (
+                    response["choices"][0]["message"]["content"].strip().lower()
+                )
 
-        current_requirement = state["current_requirement"]
-        retry_count = state.get("requirement_retry_count", 0) + 1
+                if (
+                    validation_result != "invalid"
+                    and validation_result in req_config["valid_options"]
+                ):
+                    is_valid = True
+                    validated_value = validation_result
 
-        if retry_count >= 2:
-            # After 2 retries, offer to go back to main menu
-            prompt = f"I'm having trouble understanding your input for {current_requirement}. Would you like to go back to the main menu? (yes/no)"
-            return {
-                "prompt": prompt,
-                "current_step": "confirm_back_to_menu",
-                "requirement_retry_count": retry_count,
-            }
-        else:
-            prompt = f"Invalid input for {current_requirement}. Please try again.\n\n{requirements_config[current_requirement]['prompt']}"
-            return {"prompt": prompt, "requirement_retry_count": retry_count}
+            if is_valid:
+                # Store the validated value and move to next requirement
+                github_requirements[current_requirement] = validated_value
+
+                # Find next requirement
+                current_index = requirements_order.index(current_requirement)
+
+                if current_index < len(requirements_order) - 1:
+                    # Move to next requirement
+                    next_requirement = requirements_order[current_index + 1]
+                    prompt = f"✓ {current_requirement}: {validated_value}\n\nNext requirement:\n{requirements_config[next_requirement]['prompt']}"
+
+                    return {
+                        "prompt": prompt,
+                        "current_requirement": next_requirement,
+                        "github_requirements": github_requirements,
+                        "requirement_retry_count": 0,
+                        "current_step": "github_requirements",
+                    }
+                else:
+                    # All requirements collected
+                    summary = (
+                        "✅ All GitHub repository requirements collected!\n\nSummary:\n"
+                    )
+                    for req, value in github_requirements.items():
+                        summary += f"• {req.replace('_', ' ').title()}: {value}\n"
+
+                    return {
+                        "github_requirements": github_requirements,
+                        "current_step": "github_requirements_complete",
+                        "prompt": summary,
+                    }
+            else:
+                # Invalid input, retry
+                retry_count += 1
+
+                if retry_count >= 2:
+                    prompt = f"❌ I'm having trouble with your input for {current_requirement}.\nWould you like to go back to the main menu? (yes/no)"
+                    return {
+                        "prompt": prompt,
+                        "current_step": "confirm_back_to_menu",
+                        "requirement_retry_count": retry_count,
+                    }
+                else:
+                    prompt = f"❌ Invalid input: '{user_input}'\n\nPlease try again:\n{req_config['prompt']}"
+                    return {
+                        "prompt": prompt,
+                        "requirement_retry_count": retry_count,
+                        "current_step": "github_requirements",
+                    }
+
+        # Should not reach here, but return current state
+        return state
 
     def should_validate_requirement(self, state: SupervisorState) -> str:
         """Route based on validation result"""
@@ -460,56 +376,56 @@ class SupervisorGraph:
         """Route from human node based on current step"""
         current_step = state.get("current_step", "")
 
-        if current_step == "confirm_back_to_menu":
-            return self.should_go_back_to_menu(state)
-        elif current_step == "github_requirements":
-            return "github_validator"
+        if current_step == "github_requirements":
+            return "github_requirements"
         else:
             return "intent_analyzer"
 
-    def route_from_github_retry(self, state: SupervisorState) -> str:
-        """Route from github retry based on current step"""
-        current_step = state.get("current_step", "")
-
-        if current_step == "confirm_back_to_menu":
-            return "human_menu_confirm"
-        else:
-            return "human_requirements"
-
-    def route_from_github_next(self, state: SupervisorState) -> str:
-        """Route from github next based on completion status"""
+    def route_github_requirements(self, state: SupervisorState) -> str:
+        """Simple routing for GitHub requirements"""
         current_step = state.get("current_step", "")
 
         if current_step == "github_requirements_complete":
-            return "completion"
+            return "complete"
+        elif current_step == "confirm_back_to_menu":
+            user_input = state.get("user_request", "").strip().lower()
+            if user_input in ["yes", "y", "yeah", "sure"]:
+                return "back_to_menu"
+            else:
+                return "continue"
         else:
-            return "human_requirements"
+            return "continue"
 
     def build_graph(self) -> StateGraph:
-        """Build and return the LangGraph"""
+        """Build and return the simplified LangGraph"""
         workflow = StateGraph(SupervisorState)
 
-        # Add existing nodes
+        # Add nodes
         workflow.add_node("greeter", self.greeter_node)
         workflow.add_node("human", self.human_node)
-        workflow.add_node("human_requirements", self.human_node)
-        workflow.add_node("human_menu_confirm", self.human_node)
         workflow.add_node("intent_analyzer", self.intent_analyzer_node)
         workflow.add_node("retry_handler", self.retry_handler_node)
         workflow.add_node("completion", self.completion_node)
 
-        # Add new GitHub requirement nodes
-        workflow.add_node("github_requirements", self.github_requirements_node)
-        workflow.add_node("github_validator", self.github_requirement_validator_node)
-        workflow.add_node("github_next", self.github_requirement_next_node)
-        workflow.add_node("github_retry", self.github_requirement_retry_node)
+        # Single node for GitHub requirements
+        workflow.add_node(
+            "github_requirements", self.github_requirements_collector_node
+        )
 
-        # Add existing edges
+        # Add edges
         workflow.add_edge(START, "greeter")
         workflow.add_edge("greeter", "human")
-        workflow.add_edge("human", "intent_analyzer")
 
-        # Modified conditional edge for retry logic
+        # Route from human based on current step
+        workflow.add_conditional_edges(
+            "human",
+            self.route_from_human,
+            {
+                "intent_analyzer": "intent_analyzer",
+                "github_requirements": "github_requirements",
+            },
+        )
+
         workflow.add_conditional_edges(
             "intent_analyzer",
             self.should_retry,
@@ -521,47 +437,20 @@ class SupervisorGraph:
         )
 
         workflow.add_edge("retry_handler", "human")
+
+        # Simplified GitHub flow - single loop
+        workflow.add_conditional_edges(
+            "github_requirements",
+            self.route_github_requirements,
+            {
+                "continue": "human",  # Continue collecting requirements
+                "complete": "completion",  # All done
+                "back_to_menu": "greeter",  # User wants to go back
+            },
+        )
+
         workflow.add_edge("completion", END)
 
-        # New GitHub requirement flow edges
-        workflow.add_edge("github_requirements", "human_requirements")
-        workflow.add_edge("human_requirements", "github_validator")
-
-        workflow.add_conditional_edges(
-            "github_validator",
-            self.should_validate_requirement,
-            {
-                "next_requirement": "github_next",
-                "retry_requirement": "github_retry",
-                "back_to_menu_check": "github_retry",
-            },
-        )
-
-        workflow.add_conditional_edges(
-            "github_retry",
-            self.route_from_github_retry,
-            {
-                "human_menu_confirm": "human_menu_confirm",
-                "human_requirements": "human_requirements",
-            },
-        )
-
-        workflow.add_conditional_edges(
-            "human_menu_confirm",
-            self.should_go_back_to_menu,
-            {
-                "back_to_greeter": "greeter",
-                "continue_requirements": "human_requirements",
-            },
-        )
-
-        workflow.add_conditional_edges(
-            "github_next",
-            self.route_from_github_next,
-            {"completion": "completion", "human_requirements": "human_requirements"},
-        )
-
-        # Add checkpointer for human-in-the-loop
         checkpointer = InMemorySaver()
         return workflow.compile(checkpointer=checkpointer)
 
@@ -571,7 +460,7 @@ if __name__ == "__main__":
     supervisor = SupervisorGraph()
     graph = supervisor.build_graph()
 
-    # Initialize state with ALL required variables
+    # Simplified initial state - only core variables needed
     initial_state = {
         "user_request": "",
         "intent": "",
@@ -579,42 +468,35 @@ if __name__ == "__main__":
         "retry_count": 0,
         "prompt": "",
         "current_step": "start",
-        # GitHub requirements state variables
+        # GitHub requirements handled internally, but initialize for safety
         "github_requirements": {},
         "current_requirement": "",
-        "validation_result": False,
         "requirement_retry_count": 0,
     }
 
     config = {"configurable": {"thread_id": str(uuid.uuid4())}}
 
-    # Run the graph until the first interrupt
     print("Starting graph execution...")
     result = graph.invoke(initial_state, config=config)
 
-    # Handle interrupts in a loop to support the full GitHub requirements flow
+    # Handle interrupts - much simpler now
     while "__interrupt__" in result:
-        print("Graph interrupted for human input:")
         interrupt_data = result["__interrupt__"][0]
-        print(f"Interrupt data: {interrupt_data.value}")
-
-        # Get user input
         prompt_text = interrupt_data.value.get("prompt", "Please provide your input:")
-        user_response = input(f"{prompt_text}\nYour response: ")
+        user_response = input(f"\n{prompt_text}\n> ")
 
-        # Resume the graph with human input
-        print(f"Resuming with user input: {user_response}")
         result = graph.invoke(Command(resume=user_response), config=config)
 
-    print("Graph execution completed!")
-    print(f"Final result: {result}")
+    print("\n✅ Graph execution completed!")
 
-    # Display final GitHub requirements if they were collected
+    # Display final results
     if result.get("github_requirements"):
-        print("\n=== GitHub Repository Requirements ===")
+        print("\n" + "=" * 50)
+        print("🚀 GITHUB REPOSITORY REQUIREMENTS")
+        print("=" * 50)
         for req, value in result["github_requirements"].items():
-            print(f"{req.replace('_', ' ').title()}: {value}")
-
+            print(f"📋 {req.replace('_', ' ').title()}: {value}")
+        print("=" * 50)
     # Display the graph structure
     try:
         print("\nGraph structure:")
