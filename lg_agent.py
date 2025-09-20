@@ -2,7 +2,7 @@ import re
 import json
 import uuid
 import asyncio
-from typing import Any, Dict,
+from typing import Any, Dict
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from langgraph.constants import START
@@ -18,7 +18,6 @@ from mcp.client.stdio import stdio_client
 from langchain_mcp_adapters.tools import load_mcp_tools
 
 load_dotenv()
-
 
 
 # GitHub Requirements Structured Response
@@ -213,10 +212,10 @@ class ModernizedSupervisorGraph:
         if not conversation_history:
             # First interaction
             prompt = """Hello! I'm your AI Operations assistant. I can help you with:
-1. Create a GitHub repository
-2. Set up a Databricks schema  
-3. Create a Databricks compute cluster
-What would you like to do today?"""
+    1. Create a GitHub repository
+    2. Set up a Databricks schema  
+    3. Create a Databricks compute cluster
+    What would you like to do today?"""
             conversation_history.append({"role": "AI Assistant", "content": prompt})
         else:
             # Show the agent's last response
@@ -227,11 +226,14 @@ What would you like to do today?"""
                     break
 
             if last_agent_message:
-                prompt = f"🤖 Assistant: {last_agent_message}\n\nYour response:"
+                prompt = last_agent_message
             else:
                 prompt = "Please tell me what you'd like to do:"
 
-        user_input = interrupt({"prompt": prompt, "step": current_step})
+        # Format prompt for web UI
+        formatted_prompt = f"🤖 Assistant: {prompt}\n\nYour response:"
+
+        user_input = interrupt({"prompt": formatted_prompt, "step": current_step})
 
         return {
             "user_request": user_input,
@@ -990,7 +992,7 @@ Conversation History
             },
         )
 
-        # Databricks Compute routing 
+        # Databricks Compute routing
         workflow.add_conditional_edges(
             "databricks_compute_agent",
             self.route_worflows,
