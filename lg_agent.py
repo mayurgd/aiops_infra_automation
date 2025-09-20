@@ -1,17 +1,18 @@
-import asyncio
-from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
-from langgraph.constants import START
-from langgraph.checkpoint.memory import InMemorySaver
-from typing import TypedDict, Annotated, Optional
-from dotenv import load_dotenv
-import uuid
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from langgraph.types import interrupt, Command
-from pydantic import BaseModel
-from litellm import completion
+import re
 import json
-
+import uuid
+import asyncio
+from typing import Any
+from pydantic import BaseModel
+from dotenv import load_dotenv
+from langgraph.constants import START
+from langgraph.graph import StateGraph, END
+from langgraph.types import interrupt, Command
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import create_react_agent
+from typing import TypedDict, Annotated, Optional
+from langgraph.checkpoint.memory import InMemorySaver
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
 load_dotenv()
 
@@ -33,7 +34,6 @@ class GitHubRequirementsResponse(BaseModel):
 # Intent Response (from previous step)
 class IntentResponse(BaseModel):
     intent: str
-    confidence: str
     next_action: str
     response_message: str
 
@@ -42,18 +42,50 @@ class IntentResponse(BaseModel):
 class SupervisorState(TypedDict):
     user_request: str
     intent: str
-    messages: Annotated[list, add_messages]
+    next_action: str
     conversation_history: list
     current_step: str
-    structured_response: dict
-    github_requirements: dict
-    user_confirmed: bool  # NEW: Track if user explicitly confirmed
+
+
+def extract_llm_json(resp: Any, msg_index: int = 1) -> dict:
+    """
+    Extract JSON content from an LLM response object that may wrap output in markdown code fences.
+
+    Args:
+        resp (Any): The LLM response (from SDK).
+        msg_index (int): Which message index to pull "content" from. Defaults to 1.
+
+    Returns:
+        dict: Parsed JSON as a Python dictionary.
+    """
+
+    class AttrDict(dict):
+        """Dict with attribute-style access"""
+
+        def __getattr__(self, item):
+            val = self.get(item)
+            if isinstance(val, dict):
+                return AttrDict(val)
+            return val
+
+        __setattr__ = dict.__setitem__
+        __delattr__ = dict.__delitem__
+
+    print(resp["messages"][msg_index].content)
+    raw = resp["messages"][msg_index].content
+    return AttrDict(json.loads(raw))
 
 
 class ModernizedSupervisorGraph:
     def __init__(self):
-        self.model = "gpt-4o-mini"
         self.valid_intents = ["github_repo", "databricks_schema", "databricks_compute"]
+
+        # GitHub requirements gathering agent
+        self.github_agent = create_react_agent(
+            model="gpt-4o-mini",
+            tools=[],
+            response_format=GitHubRequirementsResponse,
+        )
 
     def human_node(self, state: SupervisorState) -> SupervisorState:
         """Handle human input for any conversation step"""
@@ -62,13 +94,16 @@ class ModernizedSupervisorGraph:
 
         if not conversation_history:
             # First interaction
-            prompt = """Hello! I'm your AI Operations assistant. I can help you with:
+            prompt = """
+            Hello! I'm your AI Operations assistant. I can help you with:
 
-1. Create a GitHub repository
-2. Set up a Databricks schema  
-3. Create a Databricks compute cluster
+            1. Create a GitHub repository
+            2. Set up a Databricks schema  
+            3. Create a Databricks compute cluster
 
-What would you like to do today?"""
+            What would you like to do today?
+            """
+            conversation_history.append({"role": "assistant", "content": prompt})
         else:
             # Show the agent's last response
             last_agent_message = None
@@ -84,89 +119,99 @@ What would you like to do today?"""
 
         user_input = interrupt({"prompt": prompt, "step": current_step})
 
-        conversation_history.append({"role": "user", "content": user_input})
-
         return {
             "user_request": user_input,
             "conversation_history": conversation_history,
         }
 
     def intent_capture_agent_node(self, state: SupervisorState) -> SupervisorState:
-        """Intent capture using direct chat completion"""
+        """Intent capture using react agent"""
         user_request = state["user_request"]
         conversation_history = state.get("conversation_history", [])
-
         conversation_context = "\n".join(
-            [f"{msg['role']}: {msg['content']}" for msg in conversation_history[-5:]]
+            [f"{msg['role']}: {msg['content']}" for msg in conversation_history[-3:]]
+        )
+        self.intent_agent = create_react_agent(
+            model="gpt-3.5-turbo",
+            tools=[],
+            prompt=f"""You are an AI Operations assistant. Analyze the user's request and classify it into one of the following services:
+
+1. "github_repo" → Creating GitHub repositories
+2. "databricks_schema" → Setting up Databricks schemas
+3. "databricks_compute" → Creating Databricks compute clusters
+
+Rules:
+ -> Always return a JSON object with the keys: "intent", "next_action", "response_message".
+ ->  "intent" must be one of ["github_repo", "databricks_schema", "databricks_compute", "unclear"].
+ ->  "next_action" must be:
+   - "proceed" if the intent is clear,
+   - "clarify" if the intent is unclear.
+ ->  "response_message" should be a natural, helpful response:
+   - If intent is clear: acknowledge the specific service. Example:
+       "intent": "github_repo",
+       "next_action": "proceed",
+       "response_message": "Great! You are looking to set up a GitHub repository."
+   - If the user’s request is unrelated: acknowledge what they said and guide them back saying u cant help with that particular request but here is what u can do.
+ -> Always enclose keys and values in double quotes, and wrap the output in curly braces.
+ -> Do not add extra text outside the JSON.
+
+ Previous Conversation History
+ ```
+ {conversation_context}
+```
+""",
         )
 
-        response = completion(
-            model=self.model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": """You are an AI Operations assistant. Analyze the user's intent for these services:
-
-1. github_repo - Creating GitHub repositories
-2. databricks_schema - Setting up Databricks schemas  
-3. databricks_compute - Creating Databricks compute clusters
-
-Respond with JSON containing:
-- intent: one of the three options above, or "unclear"
-- confidence: "high", "medium", or "low"
-- next_action: "proceed" if clear, "clarify" if unclear
-- response_message: Natural, helpful response""",
-                },
-                {
-                    "role": "user",
-                    "content": f"""Conversation so far: {conversation_context}
-Current request: "{user_request}"
-
-Analyze the intent and respond in JSON format.""",
-                },
-            ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "intent_analysis",
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "intent": {"type": "string"},
-                            "confidence": {"type": "string"},
-                            "next_action": {"type": "string"},
-                            "response_message": {"type": "string"},
-                        },
-                        "required": [
-                            "intent",
-                            "confidence",
-                            "next_action",
-                            "response_message",
-                        ],
-                    },
-                },
-            },
+        response = self.intent_agent.invoke(
+            {"messages": [{"role": "user", "content": user_request}]}
         )
+        intent_analysis = extract_llm_json(response)
 
-        intent_analysis = json.loads(response.choices[0].message.content)
-
+        conversation_history.append({"role": "user", "content": user_request})
         conversation_history.append(
-            {"role": "assistant", "content": intent_analysis["response_message"]}
+            {"role": "assistant", "content": intent_analysis.response_message}
         )
 
         return {
-            "intent": intent_analysis["intent"],
-            "structured_response": intent_analysis,
+            "intent": intent_analysis.intent,
+            "next_action": intent_analysis.next_action,
             "conversation_history": conversation_history,
             "current_step": (
                 "intent_captured"
-                if intent_analysis["next_action"] == "proceed"
+                if intent_analysis.next_action == "proceed"
                 else "intent_clarification"
             ),
         }
 
+    def route_from_human(self, state: SupervisorState) -> str:
+        """Route from human node based on current step - UPDATED"""
+        current_step = state.get("current_step", "")
+
+        if current_step == "github_gathering":
+            return "github_repo_requirements"
+        elif current_step in "databricks_schema_gathering":
+            return "databricks_schema_requirements"
+        elif current_step in "databricks_compute_gathering":
+            return "databricks_compute_requirements"
+        else:
+            return "intent_analyzer"
+
+    def route_from_intent(self, state: SupervisorState) -> str:
+        """Route after intent is captured"""
+        intent = state.get("intent", "unclear")
+        next_action = state.get("next_action", "clarify")
+
+        if next_action == "proceed" and intent == "github_repo":
+            return "github_flow"
+        elif next_action == "proceed" and intent == "databricks_schema":
+            return "databricks_schema_flow"
+        elif next_action == "proceed" and intent == "databricks_compute":
+            return "databricks_compute_flow"
+        else:
+            return "continue"
+
     def github_requirements_agent_node(self, state: SupervisorState) -> SupervisorState:
-        """GitHub requirements gathering using direct chat completion"""
+        """GitHub requirements gathering using intelligent agent"""
         user_request = state["user_request"]
         conversation_history = state.get("conversation_history", [])
         github_requirements = state.get("github_requirements", {})
@@ -176,12 +221,8 @@ Analyze the intent and respond in JSON format.""",
             [f"{msg['role']}: {msg['content']}" for msg in conversation_history[-10:]]
         )
 
-        response = completion(
-            model=self.model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": """You are a GitHub repository setup specialist. Gather ALL required information for creating a GitHub repository.
+        # Create comprehensive prompt for the GitHub agent
+        agent_prompt = f"""You are a GitHub repository setup specialist. Your job is to gather ALL required information for creating a GitHub repository.
 
 REQUIRED FIELDS:
 1. use_case_name: Name of the use case (any text)
@@ -190,6 +231,16 @@ REQUIRED FIELDS:
 4. development_team: Must be exactly one of: "eai", "deloitte", "sig", "tredence", "bora", "genpact", "tiger", "srm", "kroger", "none"
 5. additional_team: Must be exactly one of: "eai", "deloitte", "sig", "tredence", "bora", "genpact", "tiger", "srm", "kroger", "none"
 
+CURRENT STATE:
+{github_requirements}
+
+USER CONFIRMATION STATUS: {user_confirmed}
+
+CONVERSATION CONTEXT:
+{conversation_context}
+
+LATEST USER INPUT: "{user_request}"
+
 CRITICAL WORKFLOW RULES:
 1. If fields are missing → ask for them (status: "gathering", next_action: "ask_question")
 2. If user provides new info → validate and update fields, then ALWAYS go back to confirmation
@@ -197,120 +248,86 @@ CRITICAL WORKFLOW RULES:
 4. If user explicitly confirms (says yes/confirm/looks good/etc) → complete (status: "completed", next_action: "complete")
 5. If user wants to update after confirmation → help them update, reset confirmation to False, then ASK FOR CONFIRMATION AGAIN
 
-CRITICAL RULE: NEVER auto-complete even if all fields are collected. You MUST wait for explicit user confirmation before setting next_action to "complete".
+CRITICAL RULE: NEVER auto-complete even if all fields are collected. You MUST wait for explicit user confirmation before setting next_action to "complete". Only complete when the user clearly confirms they are satisfied with ALL the requirements.
 
 Look for confirmation keywords like: "yes", "confirm", "looks good", "that's correct", "proceed", "ok", "fine", etc.
 
-Respond with JSON containing all current field values and status information.""",
-                },
-                {
-                    "role": "user",
-                    "content": f"""Current requirements: {github_requirements}
-User confirmation status: {user_confirmed}
-Conversation: {conversation_context}
-Latest input: "{user_request}"
+Respond with:
+- All current field values (or None if not collected)
+- status: "gathering" (collecting fields), "confirming" (asking for final approval), or "completed" (user explicitly confirmed)
+- next_action: "ask_question", "confirm", or "complete"
+- response_message: Natural, helpful message to user
+- missing_fields: list of fields still needed
+- all_requirements_collected: true if all fields have values
+- never update the USER CONFIRMATION STATUS BY YOUSELF
 
-Analyze and respond with JSON format including all fields and workflow status.""",
-                },
-            ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "github_requirements",
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "use_case_name": {"type": ["string", "null"]},
-                            "template": {"type": ["string", "null"]},
-                            "internal_team": {"type": ["string", "null"]},
-                            "development_team": {"type": ["string", "null"]},
-                            "additional_team": {"type": ["string", "null"]},
-                            "status": {"type": "string"},
-                            "next_action": {"type": "string"},
-                            "response_message": {"type": "string"},
-                            "missing_fields": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                            },
-                            "all_requirements_collected": {"type": "boolean"},
-                        },
-                        "required": [
-                            "status",
-                            "next_action",
-                            "response_message",
-                            "missing_fields",
-                            "all_requirements_collected",
-                        ],
-                    },
-                },
-            },
+Be conversational and guide the user through the process naturally."""
+
+        response = self.github_agent.invoke(
+            {"messages": [{"role": "user", "content": agent_prompt}]}
         )
 
-        github_analysis = json.loads(response.choices[0].message.content)
+        github_analysis = response["structured_response"]
 
         # Update conversation history
         conversation_history.append(
-            {"role": "assistant", "content": github_analysis["response_message"]}
+            {"role": "assistant", "content": github_analysis.response_message}
         )
 
         # Update github requirements from agent response
         updated_requirements = {}
-        for field in [
-            "use_case_name",
-            "template",
-            "internal_team",
-            "development_team",
-            "additional_team",
-        ]:
-            if github_analysis.get(field):
-                updated_requirements[field] = github_analysis[field]
+        if github_analysis.use_case_name:
+            updated_requirements["use_case_name"] = github_analysis.use_case_name
+        if github_analysis.template:
+            updated_requirements["template"] = github_analysis.template
+        if github_analysis.internal_team:
+            updated_requirements["internal_team"] = github_analysis.internal_team
+        if github_analysis.development_team:
+            updated_requirements["development_team"] = github_analysis.development_team
+        if github_analysis.additional_team:
+            updated_requirements["additional_team"] = github_analysis.additional_team
 
         # Determine if user confirmed based on agent's analysis
-        new_user_confirmed = github_analysis["next_action"] == "complete"
+        new_user_confirmed = github_analysis.next_action == "complete"
 
         # Reset confirmation flag if user is updating something
         if (
-            github_analysis["status"] == "gathering"
+            github_analysis.status == "gathering"
             and updated_requirements != github_requirements
         ):
             new_user_confirmed = False
 
-        print(f"📋 GitHub Status: {github_analysis['status']}")
-        print(f"🔄 Next Action: {github_analysis['next_action']}")
+        print(f"📋 GitHub Status: {github_analysis.status}")
+        print(f"🔄 Next Action: {github_analysis.next_action}")
         print(f"✅ User Confirmed: {new_user_confirmed}")
 
         return {
             "github_requirements": updated_requirements,
-            "structured_response": github_analysis,
+            "structured_response": github_analysis.model_dump(),
             "conversation_history": conversation_history,
             "user_confirmed": new_user_confirmed,
             "current_step": (
                 "github_completed"
-                if github_analysis["next_action"] == "complete"
+                if github_analysis.next_action == "complete"
                 else "github_gathering"
             ),
         }
 
-    def route_from_intent(self, state: SupervisorState) -> str:
-        """Route after intent is captured"""
-        structured_response = state.get("structured_response", {})
-        next_action = structured_response.get("next_action", "clarify")
-        intent = state.get("intent", "unclear")
+    def databricks_schema_agent_node(self, state: SupervisorState) -> SupervisorState:
+        return {"current_step": "databricks_schema_completed"}
 
-        if next_action == "proceed" and intent == "github_repo":
-            return "github_flow"
-        elif next_action == "proceed" and intent in self.valid_intents:
-            return "complete"
-        elif next_action == "proceed":
-            return "complete"
-        else:
-            return "continue"
+    def databricks_compute_agent_node(self, state: SupervisorState) -> SupervisorState:
+        return {"current_step": "databricks_compute_completed"}
 
-    def route_github_flow(self, state: SupervisorState) -> str:
+    def route_worflows(self, state: SupervisorState) -> str:
         """Route within GitHub requirements flow"""
         current_step = state.get("current_step", "")
 
-        if current_step == "github_completed":
+        if current_step in [
+            "github_repo_complete",
+            "databricks_schema_completed",
+            "databricks_compute_completed",
+        ]:
             return "complete"
         else:
             return "continue"
@@ -343,31 +360,64 @@ Analyze and respond with JSON format including all fields and workflow status.""
         # Add nodes
         workflow.add_node("human", self.human_node)
         workflow.add_node("intent_agent", self.intent_capture_agent_node)
-        workflow.add_node("github_agent", self.github_requirements_agent_node)
+        workflow.add_node("github_repo_agent", self.github_requirements_agent_node)
+        workflow.add_node("databricks_schema_agent", self.databricks_schema_agent_node)
+        workflow.add_node(
+            "databricks_compute_agent", self.databricks_compute_agent_node
+        )
         workflow.add_node("completion", self.completion_node)
 
         # Build the flow
         workflow.add_edge(START, "human")
-        workflow.add_edge("human", "intent_agent")
+        workflow.add_conditional_edges(
+            "human",
+            self.route_from_human,
+            {
+                "intent_analyzer": "intent_agent",
+                "github_repo_requirements": "github_repo_agent",
+                "databricks_schema_requirements": "databricks_schema_agent",
+                "databricks_compute_requirements": "databricks_compute_agent",
+            },
+        )
 
         # Route after intent capture
         workflow.add_conditional_edges(
             "intent_agent",
             self.route_from_intent,
             {
-                "continue": "human",  # Keep clarifying intent
-                "github_flow": "github_agent",  # Start GitHub requirements
-                "complete": "completion",  # Other intents or done
+                "continue": "human",
+                "github_flow": "github_repo_agent",
+                "databricks_schema_flow": "databricks_schema_agent",
+                "databricks_compute_flow": "databricks_compute_agent",
             },
         )
 
         # GitHub flow routing
         workflow.add_conditional_edges(
-            "github_agent",
-            self.route_github_flow,
+            "github_repo_agent",
+            self.route_worflows,
             {
-                "continue": "human",  # Keep gathering requirements
-                "complete": "completion",  # Requirements completed
+                "continue": "human",
+                "complete": "completion",
+            },
+        )
+
+        # Databricks Schema routing
+        workflow.add_conditional_edges(
+            "databricks_schema_agent",
+            self.route_worflows,
+            {
+                "continue": "human",
+                "complete": "completion",
+            },
+        )
+
+        workflow.add_conditional_edges(
+            "databricks_compute_agent",
+            self.route_worflows,
+            {
+                "continue": "human",
+                "complete": "completion",
             },
         )
 
@@ -385,7 +435,7 @@ if __name__ == "__main__":
     initial_state = {
         "user_request": "",
         "intent": "",
-        "messages": [],
+        "next_action": "",
         "conversation_history": [],
         "current_step": "start",
         "structured_response": {},
