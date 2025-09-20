@@ -41,6 +41,8 @@ class SupervisorState(TypedDict):
     conversation_history: list
     current_step: str
     github_requirements: dict
+    databricks_schema_requirements: dict
+    databricks_compute_requirements: dict
 
 
 def extract_llm_json(resp: Any, msg_index: int = 1) -> Dict[str, Any]:
@@ -238,7 +240,7 @@ Rules:
        "intent": "github_repo",
        "next_action": "proceed",
        "response_message": "Great! You are looking to set up a GitHub repository."
-   - If the user’s request is unrelated: acknowledge what they said and guide them back saying u cant help with that particular request but here is what u can do.
+   - If the user's request is unrelated: acknowledge what they said and guide them back saying u cant help with that particular request but here is what u can do.
  -> Always enclose keys and values in double quotes, and wrap the output in curly braces.
  -> Do not add extra text outside the JSON.
 
@@ -300,9 +302,9 @@ Previous Conversation History
 
         if current_step == "github_gathering":
             return "github_repo_requirements"
-        elif current_step in "databricks_schema_gathering":
+        elif current_step == "databricks_schema_gathering":
             return "databricks_schema_requirements"
-        elif current_step in "databricks_compute_gathering":
+        elif current_step == "databricks_compute_gathering":
             return "databricks_compute_requirements"
         else:
             return "intent_analyzer"
@@ -344,12 +346,14 @@ RULES:
     - Ask the user to provide their inputs for the required fields. The user can provide one or multiple values at a time.
     - If the user provides a value for a specific field, attach it to that field in your requirements_gathered.
     - If the user provides multiple values and it is unclear which field each value corresponds to, ask a clarifying follow-up question to assign each value correctly.
+    - ALWAYS present the available options for each field when asking for input. This helps users understand what values are acceptable.
+    - When asking for a specific field, always include the valid options in your response_message.
     - The JSON response MUST follow this structure:
         {example_output_format}
     - "requirements_gathered": a dictionary containing the keys as the required fields and the values as the inputs provided by the user so far. Refer to previous requirements gathered so you do not miss what was gathered before. If no input gathered then set as empty dictionary {{}}.
     - "next_action": either "continue_gathering" if not all requirements are provided, "get_user_confirmation" if all are gathered, or "user_confirmed" if all are gathered and user has explicitly confirmed.
     - "response_message": a helpful natural language message guiding the user on next steps.
-    - If user doesn’t provide confirmation at "get_user_confirmation", continue asking which field they want to update. Once they explicitly confirm that values are final, set next_action to "user_confirmed".
+    - If user doesn't provide confirmation at "get_user_confirmation", continue asking which field they want to update. Once they explicitly confirm that values are final, set next_action to "user_confirmed".
 
 REQUIRED FIELDS:
     "use_case_name": Name for the repo (kebab-case, e.g., test-repo-name)
@@ -390,13 +394,154 @@ Conversation History
         }
 
     def databricks_schema_agent_node(self, state: SupervisorState) -> SupervisorState:
-        return {"current_step": "databricks_schema_completed"}
+        """Databricks schema requirements gathering using intelligent agent"""
+        user_request = state["user_request"]
+        conversation_history = state.get("conversation_history", [])
+        databricks_schema_requirements = state.get("databricks_schema_requirements", {})
+        example_output_format = {
+            "requirements_gathered": {...},
+            "next_action": "...",
+            "response_message": "...",
+        }
+        conversation_context = "\n".join(
+            [f"{msg['role']}: {msg['content']}" for msg in conversation_history[-10:]]
+        )
+
+        chat = ChatLiteLLM(model="gpt-3.5-turbo")
+        system_message = f"""You are a Databricks Schema Setup specialist. Your job is to gather ALL required information for creating a Databricks schema.
+
+RULES:
+    - Always respond ONLY with a JSON object. Do not include any text outside the JSON.
+    - When a user wants to create a schema, introduce yourself and explicitly list all required fields with the available options inside the "response_message".
+    - Ask the user to provide their inputs for the required fields. The user can provide one or multiple values at a time.
+    - If the user provides a value for a specific field, attach it to that field in your requirements_gathered.
+    - If the user provides multiple values and it is unclear which field each value corresponds to, ask a clarifying follow-up question to assign each value correctly.
+    - ALWAYS present the available options for each field when asking for input. This helps users understand what values are acceptable.
+    - When asking for a specific field, always include the valid options in your response_message.
+    - The JSON response MUST follow this structure:
+        {example_output_format}
+    - "requirements_gathered": a dictionary containing the keys as the required fields and the values as the inputs provided by the user so far. Refer to previous requirements gathered so you do not miss what was gathered before. If no input gathered then set as empty dictionary {{}}.
+    - "next_action": either "continue_gathering" if not all requirements are provided, "get_user_confirmation" if all are gathered, or "user_confirmed" if all are gathered and user has explicitly confirmed.
+    - "response_message": a helpful natural language message guiding the user on next steps.
+    - If user doesn't provide confirmation at "get_user_confirmation", continue asking which field they want to update. Once they explicitly confirm that values are final, set next_action to "user_confirmed".
+
+REQUIRED FIELDS:
+    "catalog": Databricks catalog name. Choose from ["npus_aiml_workbench", "npus_aiml_stage"]
+    "schema": Schema name (e.g., category_forecast, pricing_ppa_tool, etc.)
+    "aiml_support_team": AIML support team. Choose from ["Digital Manufacturing", "EAI", "SIG", "SRM", "AIOps"]
+    "aiml_use_case": AIML use case (e.g., retailer_pos_kroger_forecast, Category Forecast, etc.)
+    "business_owner": Business owner. Choose from ["kroger", "SRM", "Digital Manufacturing", "Enterprise-wide", "MDO", "ORM", "Transportation", "AIOps"]
+    "internal_entra_id_group": Internal Entra ID group (default: AAD-SG-NPUS-aiml-internal-contributors)
+    "external_entra_id_group": External Entra ID group (optional - can be left empty or "none")
+
+Previous Requirements Gathered
+{databricks_schema_requirements}
+
+Conversation History
+{conversation_context}
+"""
+        messages = [
+            SystemMessage(content=system_message),
+            HumanMessage(content=user_request),
+        ]
+        response = chat.invoke(messages)
+
+        schema_analysis = extract_llm_json({"messages": [0, response]})
+
+        # Update conversation history
+        conversation_history.append({"role": "user", "content": user_request})
+        conversation_history.append(
+            {"role": "AI Assistant", "content": schema_analysis.response_message}
+        )
+
+        return {
+            "databricks_schema_requirements": schema_analysis.requirements_gathered,
+            "next_action": schema_analysis.next_action,
+            "conversation_history": conversation_history,
+            "current_step": (
+                "databricks_schema_completed"
+                if schema_analysis.next_action == "user_confirmed"
+                else "databricks_schema_gathering"
+            ),
+        }
 
     def databricks_compute_agent_node(self, state: SupervisorState) -> SupervisorState:
-        return {"current_step": "databricks_compute_completed"}
+        """Databricks compute requirements gathering using intelligent agent"""
+        user_request = state["user_request"]
+        conversation_history = state.get("conversation_history", [])
+        databricks_compute_requirements = state.get(
+            "databricks_compute_requirements", {}
+        )
+        example_output_format = {
+            "requirements_gathered": {...},
+            "next_action": "...",
+            "response_message": "...",
+        }
+        conversation_context = "\n".join(
+            [f"{msg['role']}: {msg['content']}" for msg in conversation_history[-10:]]
+        )
+
+        chat = ChatLiteLLM(model="gpt-3.5-turbo")
+        system_message = f"""You are a Databricks Compute Cluster Setup specialist. Your job is to gather ALL required information for creating a Databricks compute cluster.
+
+RULES:
+    - Always respond ONLY with a JSON object. Do not include any text outside the JSON.
+    - When a user wants to create a compute cluster, introduce yourself and explicitly list all required fields with the available options inside the "response_message".
+    - Ask the user to provide their inputs for the required fields. The user can provide one or multiple values at a time.
+    - If the user provides a value for a specific field, attach it to that field in your requirements_gathered.
+    - If the user provides multiple values and it is unclear which field each value corresponds to, ask a clarifying follow-up question to assign each value correctly.
+    - ALWAYS present the available options for each field when asking for input. This helps users understand what values are acceptable.
+    - When asking for a specific field, always include the valid options in your response_message.
+    - The JSON response MUST follow this structure:
+        {example_output_format}
+    - "requirements_gathered": a dictionary containing the keys as the required fields and the values as the inputs provided by the user so far. Refer to previous requirements gathered so you do not miss what was gathered before. If no input gathered then set as empty dictionary {{}}.
+    - "next_action": either "continue_gathering" if not all requirements are provided, "get_user_confirmation" if all are gathered, or "user_confirmed" if all are gathered and user has explicitly confirmed.
+    - "response_message": a helpful natural language message guiding the user on next steps.
+    - If user doesn't provide confirmation at "get_user_confirmation", continue asking which field they want to update. Once they explicitly confirm that values are final, set next_action to "user_confirmed".
+
+REQUIRED FIELDS:
+    "cluster_name": Name of the cluster
+    "spark_version": Spark runtime version. Choose from ["16.4.x-scala2.13", "16.4.x-scala2.12", "15.4.x-scala2.12"]
+    "driver_node_type_id": Driver node type. Choose from ["Standard_D4a_v4", "Standard_D8a_v4", "Standard_D16a_v4"]
+    "node_type_id": Worker node type. Choose from ["Standard_D4a_v4", "Standard_D8a_v4", "Standard_D16a_v4"]
+    "min_workers": Minimum number of workers (default: 1, must be a number)
+    "max_workers": Maximum number of workers (default: 4, must be a number)
+    "data_security_mode": Data security mode (default: SINGLE_USER)
+    "aiml_use_case": Use case name to tag the cluster with (defaults to cluster_name if not provided)
+
+Previous Requirements Gathered
+{databricks_compute_requirements}
+
+Conversation History
+{conversation_context}
+"""
+        messages = [
+            SystemMessage(content=system_message),
+            HumanMessage(content=user_request),
+        ]
+        response = chat.invoke(messages)
+
+        compute_analysis = extract_llm_json({"messages": [0, response]})
+
+        # Update conversation history
+        conversation_history.append({"role": "user", "content": user_request})
+        conversation_history.append(
+            {"role": "AI Assistant", "content": compute_analysis.response_message}
+        )
+
+        return {
+            "databricks_compute_requirements": compute_analysis.requirements_gathered,
+            "next_action": compute_analysis.next_action,
+            "conversation_history": conversation_history,
+            "current_step": (
+                "databricks_compute_completed"
+                if compute_analysis.next_action == "user_confirmed"
+                else "databricks_compute_gathering"
+            ),
+        }
 
     def route_worflows(self, state: SupervisorState) -> str:
-        """Route within GitHub requirements flow"""
+        """Route within requirements flows"""
         current_step = state.get("current_step", "")
 
         if current_step in [
@@ -412,12 +557,28 @@ Conversation History
         """Final completion with results"""
         intent = state.get("intent", "unclear")
         github_requirements = state.get("github_requirements", {})
+        databricks_schema_requirements = state.get("databricks_schema_requirements", {})
+        databricks_compute_requirements = state.get(
+            "databricks_compute_requirements", {}
+        )
 
         if intent == "github_repo" and github_requirements:
             final_message = "🎉 GitHub repository requirements completed!"
             print(f"\n{final_message}")
             print("📋 FINAL REQUIREMENTS:")
             for field, value in github_requirements.items():
+                print(f"  • {field.replace('_', ' ').title()}: {value}")
+        elif intent == "databricks_schema" and databricks_schema_requirements:
+            final_message = "🎉 Databricks schema requirements completed!"
+            print(f"\n{final_message}")
+            print("📋 FINAL REQUIREMENTS:")
+            for field, value in databricks_schema_requirements.items():
+                print(f"  • {field.replace('_', ' ').title()}: {value}")
+        elif intent == "databricks_compute" and databricks_compute_requirements:
+            final_message = "🎉 Databricks compute cluster requirements completed!"
+            print(f"\n{final_message}")
+            print("📋 FINAL REQUIREMENTS:")
+            for field, value in databricks_compute_requirements.items():
                 print(f"  • {field.replace('_', ' ').title()}: {value}")
         else:
             final_message = f"✅ Session completed with intent: {intent}"
@@ -427,6 +588,8 @@ Conversation History
             "current_step": "completed",
             "intent": intent,
             "github_requirements": github_requirements,
+            "databricks_schema_requirements": databricks_schema_requirements,
+            "databricks_compute_requirements": databricks_compute_requirements,
         }
 
     def build_graph(self) -> StateGraph:
@@ -515,6 +678,8 @@ if __name__ == "__main__":
         "conversation_history": [],
         "current_step": "start",
         "github_requirements": {},
+        "databricks_schema_requirements": {},
+        "databricks_compute_requirements": {},
     }
 
     config = {"configurable": {"thread_id": str(uuid.uuid4())}}
@@ -536,6 +701,16 @@ if __name__ == "__main__":
     if result.get("github_requirements"):
         print("\n🎯 FINAL GITHUB REQUIREMENTS:")
         for field, value in result["github_requirements"].items():
+            print(f"  {field}: {value}")
+
+    if result.get("databricks_schema_requirements"):
+        print("\n🎯 FINAL DATABRICKS SCHEMA REQUIREMENTS:")
+        for field, value in result["databricks_schema_requirements"].items():
+            print(f"  {field}: {value}")
+
+    if result.get("databricks_compute_requirements"):
+        print("\n🎯 FINAL DATABRICKS COMPUTE REQUIREMENTS:")
+        for field, value in result["databricks_compute_requirements"].items():
             print(f"  {field}: {value}")
 
     try:
