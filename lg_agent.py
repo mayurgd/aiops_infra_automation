@@ -2,21 +2,23 @@ import re
 import json
 import uuid
 import asyncio
-from typing import Any, Dict, Union
+from typing import Any, Dict,
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from langgraph.constants import START
 from langgraph.graph import StateGraph, END
 from langgraph.types import interrupt, Command
-from langgraph.graph.message import add_messages
 from langgraph.prebuilt import create_react_agent
-from typing import TypedDict, Annotated, Optional
+from typing import TypedDict
 from langgraph.checkpoint.memory import InMemorySaver
-from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_litellm import ChatLiteLLM
 from langchain_core.messages import HumanMessage, SystemMessage
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+from langchain_mcp_adapters.tools import load_mcp_tools
 
 load_dotenv()
+
 
 
 # GitHub Requirements Structured Response
@@ -33,7 +35,7 @@ class IntentResponse(BaseModel):
     response_message: str
 
 
-# State structure
+# State structure - Enhanced to include execution results
 class SupervisorState(TypedDict):
     user_request: str
     intent: str
@@ -43,6 +45,8 @@ class SupervisorState(TypedDict):
     github_requirements: dict
     databricks_schema_requirements: dict
     databricks_compute_requirements: dict
+    execution_result: dict  # New field for storing execution results
+    error_message: str  # New field for error handling
 
 
 def extract_llm_json(resp: Any, msg_index: int = 1) -> Dict[str, Any]:
@@ -179,6 +183,27 @@ def extract_llm_json(resp: Any, msg_index: int = 1) -> Dict[str, Any]:
 class ModernizedSupervisorGraph:
     def __init__(self):
         self.valid_intents = ["github_repo", "databricks_schema", "databricks_compute"]
+        # Initialize MCP client
+        self.mcp_client = None
+        self._initialize_mcp_client()
+
+    def _initialize_mcp_client(self):
+        """Initialize the MCP client for tool execution"""
+        try:
+            # Configure MCP client using stdio connection
+            self.server_params = StdioServerParameters(
+                command="python",
+                # Update this path to your actual server file
+                args=[
+                    "/Users/mayurgd/Documents/CodingSpace/aiops_infra_automation/servers/aiops_automation_server.py"
+                ],
+            )
+            print("✅ MCP Client parameters configured successfully")
+            self.mcp_client = True  # Flag to indicate MCP is configured
+        except Exception as e:
+            print(f"⚠️ Failed to configure MCP client: {e}")
+            self.mcp_client = None
+            self.server_params = None
 
     def human_node(self, state: SupervisorState) -> SupervisorState:
         """Handle human input for any conversation step"""
@@ -387,7 +412,7 @@ Conversation History
             "next_action": github_analysis.next_action,
             "conversation_history": conversation_history,
             "current_step": (
-                "github_repo_completed"
+                "github_repo_ready_for_execution"
                 if github_analysis.next_action == "user_confirmed"
                 else "github_gathering"
             ),
@@ -459,7 +484,7 @@ Conversation History
             "next_action": schema_analysis.next_action,
             "conversation_history": conversation_history,
             "current_step": (
-                "databricks_schema_completed"
+                "databricks_schema_ready_for_execution"
                 if schema_analysis.next_action == "user_confirmed"
                 else "databricks_schema_gathering"
             ),
@@ -534,52 +559,353 @@ Conversation History
             "next_action": compute_analysis.next_action,
             "conversation_history": conversation_history,
             "current_step": (
-                "databricks_compute_completed"
+                "databricks_compute_ready_for_execution"
                 if compute_analysis.next_action == "user_confirmed"
                 else "databricks_compute_gathering"
             ),
         }
 
+    def github_execution_node(self, state: SupervisorState) -> SupervisorState:
+        """Execute GitHub repository creation using MCP tools"""
+        github_requirements = state.get("github_requirements", {})
+        conversation_history = state.get("conversation_history", [])
+
+        try:
+            print("🔄 Executing GitHub repository creation...")
+
+            conversation_history.append(
+                {
+                    "role": "AI Assistant",
+                    "content": "🚀 Creating your GitHub repository now. This may take a few moments...",
+                }
+            )
+
+            if not self.mcp_client or not self.server_params:
+                raise Exception("MCP client not configured")
+
+            # Use the proper MCP client pattern - run async code in sync context
+            async def execute_mcp_tool():
+                async with stdio_client(self.server_params) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        # Initialize the connection
+                        await session.initialize()
+
+                        # Get tools
+                        tools = await load_mcp_tools(session)
+
+                        # Find the appropriate tool
+                        create_repo_tool = None
+                        for tool in tools:
+                            if "create_github_repository" in tool.name.lower():
+                                create_repo_tool = tool
+                                break
+
+                        if not create_repo_tool:
+                            raise Exception("GitHub repository creation tool not found")
+
+                        # Execute the tool
+                        return await create_repo_tool.ainvoke(github_requirements)
+
+            # Run the async function from sync context
+            result = asyncio.run(execute_mcp_tool())
+
+            # Parse JSON string response if needed
+            if isinstance(result, str):
+                try:
+                    result = json.loads(result)
+                except json.JSONDecodeError:
+                    result = {
+                        "success": False,
+                        "error": f"Invalid JSON response: {result}",
+                    }
+
+            if result.get("success", False):
+                success_message = f"✅ GitHub repository '{github_requirements.get('use_case_name')}' created successfully!"
+                if "repository_url" in result:
+                    success_message += (
+                        f"\n🔗 Repository URL: {result['repository_url']}"
+                    )
+
+                conversation_history.append(
+                    {"role": "AI Assistant", "content": success_message}
+                )
+
+                return {
+                    "execution_result": result,
+                    "conversation_history": conversation_history,
+                    "current_step": "execution_completed",
+                }
+            else:
+                error_msg = result.get("error", "Unknown error occurred")
+                raise Exception(error_msg)
+
+        except Exception as e:
+            error_message = f"❌ Failed to create GitHub repository: {str(e)}"
+            conversation_history.append(
+                {"role": "AI Assistant", "content": error_message}
+            )
+
+            return {
+                "execution_result": {"success": False, "error": str(e)},
+                "error_message": error_message,
+                "conversation_history": conversation_history,
+                "current_step": "execution_failed",
+            }
+
+    def databricks_schema_execution_node(
+        self, state: SupervisorState
+    ) -> SupervisorState:
+        """Execute Databricks schema creation using MCP tools"""
+        databricks_schema_requirements = state.get("databricks_schema_requirements", {})
+        conversation_history = state.get("conversation_history", [])
+
+        try:
+            print("🔄 Executing Databricks schema creation...")
+
+            conversation_history.append(
+                {
+                    "role": "AI Assistant",
+                    "content": "🚀 Creating your Databricks schema now. This may take a few moments...",
+                }
+            )
+
+            if not self.mcp_client or not self.server_params:
+                raise Exception("MCP client not configured")
+
+            # Use the proper MCP client pattern - run async code in sync context
+            async def execute_mcp_tool():
+                async with stdio_client(self.server_params) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        # Initialize the connection
+                        await session.initialize()
+
+                        # Get tools
+                        tools = await load_mcp_tools(session)
+
+                        # Find the appropriate tool
+                        create_schema_tool = None
+                        for tool in tools:
+                            if (
+                                "create_databricks_schema" in tool.name.lower()
+                                or "databricks_schema" in tool.name.lower()
+                            ):
+                                create_schema_tool = tool
+                                break
+
+                        if not create_schema_tool:
+                            raise Exception("Databricks schema creation tool not found")
+
+                        # Execute the tool
+                        return await create_schema_tool.ainvoke(
+                            databricks_schema_requirements
+                        )
+
+            # Run the async function from sync context
+            result = asyncio.run(execute_mcp_tool())
+
+            # Parse JSON string response if needed
+            if isinstance(result, str):
+                try:
+                    result = json.loads(result)
+                except json.JSONDecodeError:
+                    result = {
+                        "success": False,
+                        "error": f"Invalid JSON response: {result}",
+                    }
+
+            if result.get("success", False):
+                success_message = f"✅ Databricks schema '{databricks_schema_requirements.get('catalog')}.{databricks_schema_requirements.get('schema')}' created successfully!"
+
+                conversation_history.append(
+                    {"role": "AI Assistant", "content": success_message}
+                )
+
+                return {
+                    "execution_result": result,
+                    "conversation_history": conversation_history,
+                    "current_step": "execution_completed",
+                }
+            else:
+                error_msg = result.get("error", "Unknown error occurred")
+                raise Exception(error_msg)
+
+        except Exception as e:
+            error_message = f"❌ Failed to create Databricks schema: {str(e)}"
+            conversation_history.append(
+                {"role": "AI Assistant", "content": error_message}
+            )
+
+            return {
+                "execution_result": {"success": False, "error": str(e)},
+                "error_message": error_message,
+                "conversation_history": conversation_history,
+                "current_step": "execution_failed",
+            }
+
+    def databricks_compute_execution_node(
+        self, state: SupervisorState
+    ) -> SupervisorState:
+        """Execute Databricks compute cluster creation using MCP tools"""
+        databricks_compute_requirements = state.get(
+            "databricks_compute_requirements", {}
+        )
+        conversation_history = state.get("conversation_history", [])
+
+        try:
+            print("🔄 Executing Databricks compute cluster creation...")
+
+            conversation_history.append(
+                {
+                    "role": "AI Assistant",
+                    "content": "🚀 Creating your Databricks compute cluster now. This may take a few moments...",
+                }
+            )
+
+            if not self.mcp_client or not self.server_params:
+                raise Exception("MCP client not configured")
+
+            # Use the proper MCP client pattern - run async code in sync context
+            async def execute_mcp_tool():
+                async with stdio_client(self.server_params) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        # Initialize the connection
+                        await session.initialize()
+
+                        # Get tools
+                        tools = await load_mcp_tools(session)
+
+                        # Find the appropriate tool
+                        create_compute_tool = None
+                        for tool in tools:
+                            if (
+                                "create_databricks_compute" in tool.name.lower()
+                                or "databricks_compute" in tool.name.lower()
+                            ):
+                                create_compute_tool = tool
+                                break
+
+                        if not create_compute_tool:
+                            raise Exception(
+                                "Databricks compute creation tool not found"
+                            )
+
+                        # Execute the tool
+                        return await create_compute_tool.ainvoke(
+                            databricks_compute_requirements
+                        )
+
+            # Run the async function from sync context
+            result = asyncio.run(execute_mcp_tool())
+
+            # Parse JSON string response if needed
+            if isinstance(result, str):
+                try:
+                    result = json.loads(result)
+                except json.JSONDecodeError:
+                    result = {
+                        "success": False,
+                        "error": f"Invalid JSON response: {result}",
+                    }
+
+            if result.get("success", False):
+                success_message = f"✅ Databricks compute cluster '{databricks_compute_requirements.get('cluster_name')}' creation initiated successfully!"
+                if "cluster_id" in result:
+                    success_message += f"\n🆔 Cluster ID: {result['cluster_id']}"
+
+                conversation_history.append(
+                    {"role": "AI Assistant", "content": success_message}
+                )
+
+                return {
+                    "execution_result": result,
+                    "conversation_history": conversation_history,
+                    "current_step": "execution_completed",
+                }
+            else:
+                error_msg = result.get("error", "Unknown error occurred")
+                raise Exception(error_msg)
+
+        except Exception as e:
+            error_message = f"❌ Failed to create Databricks compute cluster: {str(e)}"
+            conversation_history.append(
+                {"role": "AI Assistant", "content": error_message}
+            )
+
+            return {
+                "execution_result": {"success": False, "error": str(e)},
+                "error_message": error_message,
+                "conversation_history": conversation_history,
+                "current_step": "execution_failed",
+            }
+
     def route_worflows(self, state: SupervisorState) -> str:
-        """Route within requirements flows"""
+        """Route within requirements flows - UPDATED to include execution routing"""
         current_step = state.get("current_step", "")
 
-        if current_step in [
-            "github_repo_completed",
-            "databricks_schema_completed",
-            "databricks_compute_completed",
-        ]:
+        if current_step == "github_repo_ready_for_execution":
+            return "execute"
+        elif current_step == "databricks_schema_ready_for_execution":
+            return "execute"
+        elif current_step == "databricks_compute_ready_for_execution":
+            return "execute"
+        elif current_step in ["execution_completed", "execution_failed"]:
             return "complete"
         else:
             return "continue"
 
     def completion_node(self, state: SupervisorState) -> SupervisorState:
-        """Final completion with results"""
+        """Final completion with results - ENHANCED to show execution results"""
         intent = state.get("intent", "unclear")
+        execution_result = state.get("execution_result", {})
+        error_message = state.get("error_message", "")
         github_requirements = state.get("github_requirements", {})
         databricks_schema_requirements = state.get("databricks_schema_requirements", {})
         databricks_compute_requirements = state.get(
             "databricks_compute_requirements", {}
         )
+        current_step = state.get("current_step", "")
 
-        if intent == "github_repo" and github_requirements:
-            final_message = "🎉 GitHub repository requirements completed!"
+        if current_step == "execution_completed":
+            if intent == "github_repo":
+                final_message = "🎉 GitHub repository created successfully!"
+                print(f"\n{final_message}")
+                print("📋 REQUIREMENTS USED:")
+                for field, value in github_requirements.items():
+                    print(f"  • {field.replace('_', ' ').title()}: {value}")
+                if execution_result.get("repository_url"):
+                    print(f"🔗 Repository URL: {execution_result['repository_url']}")
+
+            elif intent == "databricks_schema":
+                final_message = "🎉 Databricks schema created successfully!"
+                print(f"\n{final_message}")
+                print("📋 REQUIREMENTS USED:")
+                for field, value in databricks_schema_requirements.items():
+                    print(f"  • {field.replace('_', ' ').title()}: {value}")
+
+            elif intent == "databricks_compute":
+                final_message = (
+                    "🎉 Databricks compute cluster creation initiated successfully!"
+                )
+                print(f"\n{final_message}")
+                print("📋 REQUIREMENTS USED:")
+                for field, value in databricks_compute_requirements.items():
+                    print(f"  • {field.replace('_', ' ').title()}: {value}")
+                if execution_result.get("cluster_id"):
+                    print(f"🆔 Cluster ID: {execution_result['cluster_id']}")
+
+        elif current_step == "execution_failed":
+            final_message = f"❌ Execution failed: {error_message}"
             print(f"\n{final_message}")
-            print("📋 FINAL REQUIREMENTS:")
-            for field, value in github_requirements.items():
-                print(f"  • {field.replace('_', ' ').title()}: {value}")
-        elif intent == "databricks_schema" and databricks_schema_requirements:
-            final_message = "🎉 Databricks schema requirements completed!"
-            print(f"\n{final_message}")
-            print("📋 FINAL REQUIREMENTS:")
-            for field, value in databricks_schema_requirements.items():
-                print(f"  • {field.replace('_', ' ').title()}: {value}")
-        elif intent == "databricks_compute" and databricks_compute_requirements:
-            final_message = "🎉 Databricks compute cluster requirements completed!"
-            print(f"\n{final_message}")
-            print("📋 FINAL REQUIREMENTS:")
-            for field, value in databricks_compute_requirements.items():
-                print(f"  • {field.replace('_', ' ').title()}: {value}")
+            print("📋 REQUIREMENTS THAT WERE ATTEMPTED:")
+            if intent == "github_repo" and github_requirements:
+                for field, value in github_requirements.items():
+                    print(f"  • {field.replace('_', ' ').title()}: {value}")
+            elif intent == "databricks_schema" and databricks_schema_requirements:
+                for field, value in databricks_schema_requirements.items():
+                    print(f"  • {field.replace('_', ' ').title()}: {value}")
+            elif intent == "databricks_compute" and databricks_compute_requirements:
+                for field, value in databricks_compute_requirements.items():
+                    print(f"  • {field.replace('_', ' ').title()}: {value}")
         else:
             final_message = f"✅ Session completed with intent: {intent}"
             print(f"\n{final_message}")
@@ -590,13 +916,14 @@ Conversation History
             "github_requirements": github_requirements,
             "databricks_schema_requirements": databricks_schema_requirements,
             "databricks_compute_requirements": databricks_compute_requirements,
+            "execution_result": execution_result,
         }
 
     def build_graph(self) -> StateGraph:
-        """Build the complete modernized graph"""
+        """Build the complete modernized graph with MCP tool execution"""
         workflow = StateGraph(SupervisorState)
 
-        # Add nodes
+        # Add all nodes including execution nodes
         workflow.add_node("human", self.human_node)
         workflow.add_node("intent_agent", self.intent_capture_agent_node)
         workflow.add_node("github_repo_agent", self.github_requirements_agent_node)
@@ -604,6 +931,16 @@ Conversation History
         workflow.add_node(
             "databricks_compute_agent", self.databricks_compute_agent_node
         )
+
+        # NEW EXECUTION NODES
+        workflow.add_node("github_execution", self.github_execution_node)
+        workflow.add_node(
+            "databricks_schema_execution", self.databricks_schema_execution_node
+        )
+        workflow.add_node(
+            "databricks_compute_execution", self.databricks_compute_execution_node
+        )
+
         workflow.add_node("completion", self.completion_node)
 
         # Build the flow
@@ -637,6 +974,7 @@ Conversation History
             self.route_worflows,
             {
                 "continue": "human",
+                "execute": "github_execution",
                 "complete": "completion",
             },
         )
@@ -647,18 +985,26 @@ Conversation History
             self.route_worflows,
             {
                 "continue": "human",
+                "execute": "databricks_schema_execution",
                 "complete": "completion",
             },
         )
 
+        # Databricks Compute routing 
         workflow.add_conditional_edges(
             "databricks_compute_agent",
             self.route_worflows,
             {
                 "continue": "human",
+                "execute": "databricks_compute_execution",
                 "complete": "completion",
             },
         )
+
+        # NEW: Execution node routing - all execution nodes route to completion
+        workflow.add_edge("github_execution", "completion")
+        workflow.add_edge("databricks_schema_execution", "completion")
+        workflow.add_edge("databricks_compute_execution", "completion")
 
         workflow.add_edge("completion", END)
 
@@ -666,7 +1012,7 @@ Conversation History
         return workflow.compile(checkpointer=checkpointer)
 
 
-# Example usage:
+# Example usage with enhanced error handling and execution:
 if __name__ == "__main__":
     supervisor = ModernizedSupervisorGraph()
     graph = supervisor.build_graph()
@@ -680,38 +1026,59 @@ if __name__ == "__main__":
         "github_requirements": {},
         "databricks_schema_requirements": {},
         "databricks_compute_requirements": {},
+        "execution_result": {},
+        "error_message": "",
     }
 
     config = {"configurable": {"thread_id": str(uuid.uuid4())}}
 
-    print("🚀 Starting AI Operations Assistant...")
-    result = graph.invoke(initial_state, config=config)
+    print("🚀 Starting Enhanced AI Operations Assistant with MCP Tool Integration...")
 
-    # Handle interrupts
-    while "__interrupt__" in result:
-        interrupt_data = result["__interrupt__"][0]
-        prompt_text = interrupt_data.value.get("prompt", "Please provide your input:")
-        user_response = input(f"\n{prompt_text}\n> ")
+    try:
+        result = graph.invoke(initial_state, config=config)
 
-        result = graph.invoke(Command(resume=user_response), config=config)
+        # Handle interrupts
+        while "__interrupt__" in result:
+            interrupt_data = result["__interrupt__"][0]
+            prompt_text = interrupt_data.value.get(
+                "prompt", "Please provide your input:"
+            )
+            user_response = input(f"\n{prompt_text}\n> ")
 
-    print("\n✅ Session completed!")
+            result = graph.invoke(Command(resume=user_response), config=config)
 
-    # Show final results
-    if result.get("github_requirements"):
-        print("\n🎯 FINAL GITHUB REQUIREMENTS:")
-        for field, value in result["github_requirements"].items():
-            print(f"  {field}: {value}")
+        print("\n✅ Session completed!")
 
-    if result.get("databricks_schema_requirements"):
-        print("\n🎯 FINAL DATABRICKS SCHEMA REQUIREMENTS:")
-        for field, value in result["databricks_schema_requirements"].items():
-            print(f"  {field}: {value}")
+        # Show final results with execution status
+        execution_result = result.get("execution_result", {})
 
-    if result.get("databricks_compute_requirements"):
-        print("\n🎯 FINAL DATABRICKS COMPUTE REQUIREMENTS:")
-        for field, value in result["databricks_compute_requirements"].items():
-            print(f"  {field}: {value}")
+        if execution_result.get("success"):
+            print("\n🎯 EXECUTION SUCCESSFUL!")
+        elif execution_result:
+            print(
+                f"\n❌ EXECUTION FAILED: {execution_result.get('error', 'Unknown error')}"
+            )
+
+        # Show gathered requirements
+        if result.get("github_requirements"):
+            print("\n🎯 GITHUB REQUIREMENTS USED:")
+            for field, value in result["github_requirements"].items():
+                print(f"  {field}: {value}")
+
+        if result.get("databricks_schema_requirements"):
+            print("\n🎯 DATABRICKS SCHEMA REQUIREMENTS USED:")
+            for field, value in result["databricks_schema_requirements"].items():
+                print(f"  {field}: {value}")
+
+        if result.get("databricks_compute_requirements"):
+            print("\n🎯 DATABRICKS COMPUTE REQUIREMENTS USED:")
+            for field, value in result["databricks_compute_requirements"].items():
+                print(f"  {field}: {value}")
+
+    except KeyboardInterrupt:
+        print("\n\n👋 Session interrupted by user. Goodbye!")
+    except Exception as e:
+        print(f"\n❌ An error occurred: {str(e)}")
 
     try:
         print("\n📊 Graph structure:")
