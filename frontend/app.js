@@ -3,6 +3,7 @@ let statusCheckInterval;
 let currentStatus = 'idle';
 let messageHistory = [];
 let isWaitingForUserInput = false;
+let isProcessing = false; // NEW: Track if agent is processing
 
 // Initialize the app
 document.addEventListener('DOMContentLoaded', function() {
@@ -20,7 +21,9 @@ function autoResize(textarea) {
 function handleKeyDown(event) {
     if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
-        sendMessage();
+        if (!isProcessing || isWaitingForUserInput) { // UPDATED: Only allow if not processing or waiting for input
+            sendMessage();
+        }
     }
 }
 
@@ -67,6 +70,7 @@ function addMessage(type, content, avatar = null, isHTML = false) {
 
 // Show typing indicator
 function showTyping() {
+    hideTyping(); // UPDATED: Remove any existing typing indicator first
     const chatMessages = document.getElementById('chatMessages');
     const typingDiv = document.createElement('div');
     typingDiv.className = 'message agent';
@@ -98,16 +102,43 @@ function hideTyping() {
     }
 }
 
-// Update input placeholder based on state
-function updateInputPlaceholder(isWaitingForResponse = false) {
+// UPDATED: Update input state based on processing status
+function updateInputState() {
     const chatInput = document.getElementById('chatInput');
-    if (isWaitingForResponse) {
+    const sendBtn = document.getElementById('sendBtn');
+    
+    if (isProcessing && !isWaitingForUserInput) {
+        // Agent is processing, block all input
+        chatInput.disabled = true;
+        chatInput.placeholder = "Agent is working... Please wait";
+        chatInput.classList.add('disabled');
+        sendBtn.disabled = true;
+    } else if (isWaitingForUserInput) {
+        // Agent is waiting for response
+        chatInput.disabled = false;
         chatInput.placeholder = "Type your response to the agent's question...";
+        chatInput.classList.remove('disabled');
         chatInput.classList.add('waiting-response');
+        sendBtn.disabled = false;
+        // Ensure input is visible and focusable
+        chatInput.style.color = '';
+        chatInput.style.backgroundColor = '';
     } else {
+        // Ready for new requests
+        chatInput.disabled = false;
         chatInput.placeholder = "Describe what you want to automate (e.g., 'Create a GitHub repo for my ML project')...";
-        chatInput.classList.remove('waiting-response');
+        chatInput.classList.remove('disabled', 'waiting-response');
+        sendBtn.disabled = false;
+        // Ensure input is visible and focusable
+        chatInput.style.color = '';
+        chatInput.style.backgroundColor = '';
     }
+}
+
+// UPDATED: Update input placeholder based on state
+function updateInputPlaceholder(isWaitingForResponse = false) {
+    isWaitingForUserInput = isWaitingForResponse;
+    updateInputState();
 }
 
 // Send message or response
@@ -115,7 +146,7 @@ async function sendMessage() {
     const chatInput = document.getElementById('chatInput');
     const message = chatInput.value.trim();
     
-    if (!message) return;
+    if (!message || (isProcessing && !isWaitingForUserInput)) return;
     
     // Add user message
     addMessage('user', message);
@@ -133,6 +164,8 @@ async function sendMessage() {
 
 // Start new automation
 async function startAutomation(message) {
+    isProcessing = true; // UPDATED: Set processing flag
+    updateInputState(); // UPDATED: Update input state
     showTyping();
     setSendButton(true);
     
@@ -156,6 +189,8 @@ async function startAutomation(message) {
     } catch (error) {
         hideTyping();
         addMessage('system', `❌ Error: ${error.message}`, '⚠️');
+        isProcessing = false; // UPDATED: Reset processing flag on error
+        updateInputState();
         setSendButton(false);
     }
 }
@@ -163,6 +198,10 @@ async function startAutomation(message) {
 // Submit response to agent question
 async function submitResponse(response) {
     setSendButton(true);
+    isWaitingForUserInput = false; // UPDATED: Reset immediately
+    isProcessing = true; // UPDATED: Set processing flag
+    updateInputState(); // UPDATED: Update input state
+    showTyping(); // UPDATED: Show typing when processing response
     
     try {
         await fetch(`${API_BASE}/submit_input`, {
@@ -175,20 +214,23 @@ async function submitResponse(response) {
             })
         });
         
-        // Reset waiting state
-        isWaitingForUserInput = false;
-        updateInputPlaceholder(false);
-        // addMessage('system', 'Response submitted, continuing automation...');
+        // Don't show any status messages here, let status checking handle it
         
     } catch (error) {
         addMessage('system', `❌ Error submitting response: ${error.message}`, '⚠️');
+        isProcessing = false; // UPDATED: Reset on error
+        updateInputState();
+        hideTyping();
         setSendButton(false);
     }
 }
 
 // Status checking
 function startStatusChecking() {
-    statusCheckInterval = setInterval(checkStatus, 2000);
+    if (statusCheckInterval) {
+        clearInterval(statusCheckInterval);
+    }
+    statusCheckInterval = setInterval(checkStatus, 1500); // UPDATED: Faster polling
 }
 
 function stopStatusChecking() {
@@ -197,6 +239,8 @@ function stopStatusChecking() {
     }
 }
 
+let lastPrompt = null; // UPDATED: Track last prompt to avoid duplicates
+
 async function checkStatus() {
     try {
         const response = await fetch(`${API_BASE}/status`);
@@ -204,31 +248,53 @@ async function checkStatus() {
         
         updateStatusIndicator(status.status);
         
-        // Handle agent questions
-        if (status.status === 'waiting_input' && status.prompt && !isWaitingForUserInput) {
-            showAgentQuestion(status.prompt);
-            isWaitingForUserInput = true;
-            updateInputPlaceholder(true);
-            setSendButton(false);
+        // UPDATED: Handle status changes more precisely
+        const statusChanged = currentStatus !== status.status;
+        
+        // Handle agent questions - only show if it's a new prompt
+        if (status.status === 'waiting_input' && status.prompt) {
+            if (status.prompt !== lastPrompt) {
+                hideTyping();
+                showAgentQuestion(status.prompt);
+                isWaitingForUserInput = true;
+                isProcessing = false; // UPDATED: Not processing when waiting for input
+                updateInputState();
+                setSendButton(false);
+                lastPrompt = status.prompt;
+            }
         }
         
-        // Handle completion
-        if (status.result && currentStatus !== 'complete' && currentStatus !== 'error') {
+        // UPDATED: Handle running status
+        if (status.status === 'running' && currentStatus !== 'running') {
+            isProcessing = true;
+            isWaitingForUserInput = false;
+            updateInputState();
+            if (!document.getElementById('typingIndicator')) {
+                showTyping();
+            }
+        }
+        
+        // Handle completion - only show result if status changed and we have a result
+        if (status.result && statusChanged && (status.status === 'complete' || status.status === 'error')) {
             hideTyping();
             addMessage('agent', status.result);
-        }
-        
-        if (status.status === 'complete' || status.status === 'error') {
+            isProcessing = false; // UPDATED: Reset processing flag
             isWaitingForUserInput = false;
-            updateInputPlaceholder(false);
+            updateInputState();
             setSendButton(false);
             stopStatusChecking();
+            lastPrompt = null; // UPDATED: Reset prompt tracking
         }
         
         currentStatus = status.status;
         
     } catch (error) {
         console.error('Status check error:', error);
+        // UPDATED: Reset flags on error
+        isProcessing = false;
+        isWaitingForUserInput = false;
+        updateInputState();
+        hideTyping();
     }
 }
 
@@ -250,7 +316,9 @@ function showAgentQuestion(prompt) {
     
     // Focus on input for immediate response
     setTimeout(() => {
-        document.getElementById('chatInput').focus();
+        if (!isProcessing || isWaitingForUserInput) { // UPDATED: Only focus if appropriate
+            document.getElementById('chatInput').focus();
+        }
     }, 100);
 }
 
@@ -294,7 +362,9 @@ function clearChat() {
     `;
     messageHistory = [];
     isWaitingForUserInput = false;
-    updateInputPlaceholder(false);
+    isProcessing = false; // UPDATED: Reset processing flag
+    lastPrompt = null; // UPDATED: Reset prompt tracking
+    updateInputState(); // UPDATED: Update input state
     stopStatusChecking();
 }
 
@@ -331,5 +401,10 @@ async function checkServerHealth() {
     }
 }
 
-// Auto-focus chat input
-document.getElementById('chatInput').focus();
+// UPDATED: Auto-focus chat input only when appropriate
+document.addEventListener('DOMContentLoaded', function() {
+    const chatInput = document.getElementById('chatInput');
+    if (chatInput && !isProcessing) {
+        chatInput.focus();
+    }
+});
