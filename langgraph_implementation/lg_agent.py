@@ -1,3 +1,4 @@
+import os
 import re
 import json
 import uuid
@@ -193,9 +194,7 @@ class ModernizedSupervisorGraph:
             self.server_params = StdioServerParameters(
                 command="python",
                 # Update this path to your actual server file
-                args=[
-                    "/Users/mayurgd/Documents/CodingSpace/aiops_infra_automation/servers/aiops_automation_server.py"
-                ],
+                args=[os.environ["SERVER_LOCATION"]],
             )
             print("✅ MCP Client parameters configured successfully")
             self.mcp_client = True  # Flag to indicate MCP is configured
