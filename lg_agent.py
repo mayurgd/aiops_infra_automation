@@ -337,7 +337,7 @@ Previous Conversation History
             [f"{msg['role']}: {msg['content']}" for msg in conversation_history[-10:]]
         )
 
-        chat = ChatLiteLLM(model="gpt-3.5-turbo")
+        chat = ChatLiteLLM(model="gpt-4o-mini", temperature=0.3)
         system_message = f"""You are a GitHub repository Setup specialist. Your job is to gather ALL required information for creating a GitHub repository.
 
 RULES:
@@ -351,7 +351,7 @@ RULES:
     - The JSON response MUST follow this structure:
         {example_output_format}
     - "requirements_gathered": a dictionary containing the keys as the required fields and the values as the inputs provided by the user so far. Refer to previous requirements gathered so you do not miss what was gathered before. If no input gathered then set as empty dictionary {{}}.
-    - "next_action": either "continue_gathering" if not all requirements are provided, "get_user_confirmation" if all are gathered, or "user_confirmed" if all are gathered and user has explicitly confirmed.
+    - "next_action": either "continue_gathering" if not all requirements are provided, "get_user_confirmation" if all are gathered, "user_confirmed" if all are gathered and user has explicitly confirmed.
     - "response_message": a helpful natural language message guiding the user on next steps.
     - If user doesn't provide confirmation at "get_user_confirmation", continue asking which field they want to update. Once they explicitly confirm that values are final, set next_action to "user_confirmed".
 
@@ -407,7 +407,7 @@ Conversation History
             [f"{msg['role']}: {msg['content']}" for msg in conversation_history[-10:]]
         )
 
-        chat = ChatLiteLLM(model="gpt-3.5-turbo")
+        chat = ChatLiteLLM(model="gpt-4o-mini", temperature=0.3)
         system_message = f"""You are a Databricks Schema Setup specialist. Your job is to gather ALL required information for creating a Databricks schema.
 
 RULES:
@@ -481,7 +481,7 @@ Conversation History
             [f"{msg['role']}: {msg['content']}" for msg in conversation_history[-10:]]
         )
 
-        chat = ChatLiteLLM(model="gpt-3.5-turbo")
+        chat = ChatLiteLLM(model="gpt-4o-mini", temperature=0.3)
         system_message = f"""You are a Databricks Compute Cluster Setup specialist. Your job is to gather ALL required information for creating a Databricks compute cluster.
 
 RULES:
