@@ -52,14 +52,15 @@ github_requirements_gathering_task:
     - Ask for clarification if their input doesn't match valid options
     - Don't proceed until all fields have valid values
     
-    Continue gathering information until all required fields are collected with valid values.
+    Once ALL required fields are collected with valid values, immediately delegate to the 
+    consolidator_agent with all the gathered requirements for final confirmation.
+    
+    Continue gathering information until all required fields are collected, then delegate.
   expected_output: >
-    A structured collection of all GitHub repository requirements:
+    Complete delegation to consolidator_agent with all GitHub repository requirements:
     - use_case_name: [customer provided name]
     - template: [selected from: npus-aiml-mlops-stacks-template, npus-aiml-skinny-dab-template]
     - internal_team: [selected from: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger]
     - development_team: [selected from: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger, 'none']
     - additional_team: [selected from: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger, 'none']
-    
-    Confirm all requirements are complete and ready for repository creation.
   agent: github_requirements_agent

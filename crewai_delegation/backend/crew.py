@@ -102,7 +102,6 @@ class AiopsAgenticAutomation:
         return Agent(
             config=self.agents_config["guidance_agent"],
             tools=[get_human_input],
-            allow_delegation=True,
             verbose=True,
         )
 
@@ -111,7 +110,6 @@ class AiopsAgenticAutomation:
         return Agent(
             config=self.agents_config["github_requirements_agent"],
             tools=[get_human_input],
-            allow_delegation=False,
             verbose=True,
         )
 
@@ -135,7 +133,8 @@ class AiopsAgenticAutomation:
         return Crew(
             agents=self.agents,
             tasks=self.tasks,
-            process=Process.sequential,
+            process=Process.hierarchical,
+            manager_llm="gpt-4o",
             verbose=True,
         )
 
