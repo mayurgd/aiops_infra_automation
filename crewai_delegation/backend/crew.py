@@ -101,6 +101,7 @@ class AiopsAgenticAutomation:
     def guidance_agent(self) -> Agent:
         return Agent(
             config=self.agents_config["guidance_agent"],
+            tools=[get_human_input],
             allow_delegation=True,
             verbose=True,
         )
@@ -132,13 +133,9 @@ class AiopsAgenticAutomation:
     def crew(self) -> Crew:
         """Creates crew with all agents and tasks available for delegation"""
         return Crew(
-            agents=[self.github_requirements_agent()],
-            tasks=[
-                self.github_requirements_gathering_task(),
-            ],
-            manager_agent=self.guidance_agent(),
-            process=Process.hierarchical,
-            planning=True,
+            agents=self.agents,
+            tasks=self.tasks,
+            process=Process.sequential,
             verbose=True,
         )
 
