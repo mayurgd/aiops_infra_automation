@@ -1,0 +1,65 @@
+intent_determination_task:
+  description: >
+    Guide the customer through a conversation to determine their specific needs and help them 
+    select one of the three available services:
+    1. GitHub repository setup
+    2. Databricks schema creation  
+    3. Databricks compute creation
+    
+    Ask clarifying questions to understand what the customer needs. Once you clearly understand 
+    their intent:
+    
+    - If they need "GitHub repository setup": Immediately delegate to the github_requirements_agent 
+      to collect all technical requirements (use_case_name, template, internal_team, development_team, additional_team)
+    - If they need "Databricks schema creation": Complete the task with intent "databricks_schema"
+    - If they need "Databricks compute creation": Complete the task with intent "databricks_compute"  
+    - If unclear: Complete the task with intent "unclear"
+    
+    Stay focused on only these three services. If the customer asks for something outside 
+    these options, politely redirect them to choose from the available services.
+    
+    CRITICAL: When delegating to github_requirements_agent, provide them with the context 
+    that the customer has selected GitHub repository setup, so they can proceed directly 
+    to gathering technical requirements without re-asking about service selection.
+  expected_output: >
+    For GitHub repository setup: Complete delegation to github_requirements_agent with all 
+    technical requirements collected (use_case_name, template, internal_team, development_team, additional_team).
+    
+    For other services: A clear determination with summary:
+    - intent: "databricks_schema" or "databricks_compute" or "unclear"
+    - summary: Brief description of customer's needs and confirmed service selection
+  agent: guidance_agent
+
+github_requirements_gathering_task:
+  description: >
+    Collect the following required information from the customer for GitHub repository setup:
+    
+    1. use_case_name: Ask for the name/title of their use case or project
+    2. template: Help them select from available templates:
+       - npus-aiml-mlops-stacks-template
+       - npus-aiml-skinny-dab-template
+    3. internal_team: Ask which internal team they belong to (must select one):
+       - eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger
+    4. development_team: Ask which development team will work on this (can be 'none'):
+       - eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger, 'none'
+    5. additional_team: Ask if any additional team needs access (can be 'none'):
+       - eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger, 'none'
+    
+    For each field:
+    - Explain what it's for in simple terms
+    - Present the valid options clearly
+    - Validate the customer's input against the allowed values
+    - Ask for clarification if their input doesn't match valid options
+    - Don't proceed until all fields have valid values
+    
+    Continue gathering information until all required fields are collected with valid values.
+  expected_output: >
+    A structured collection of all GitHub repository requirements:
+    - use_case_name: [customer provided name]
+    - template: [selected from: npus-aiml-mlops-stacks-template, npus-aiml-skinny-dab-template]
+    - internal_team: [selected from: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger]
+    - development_team: [selected from: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger, 'none']
+    - additional_team: [selected from: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger, 'none']
+    
+    Confirm all requirements are complete and ready for repository creation.
+  agent: github_requirements_agent
