@@ -71,7 +71,7 @@ class GitHubRepoAutomation:
             errors.append("Use case name cannot be empty")
         elif not use_case_name.replace("-", "").replace("_", "").isalnum():
             errors.append(
-                "Use case name should only contain alphanumeric characters, hyphens, and underscores"
+                "Use case name should only contain alphanumeric character and hyphens. eg: example-repo"
             )
 
         return {
