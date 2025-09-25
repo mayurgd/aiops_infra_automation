@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import os
 from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
@@ -77,7 +79,7 @@ load_dotenv()
 
 @CrewBase
 class AiopsAgenticAutomation:
-    """AiopsAgenticAutomation crew with proper agent delegation"""
+    """AiopsAgenticAutomation crew with two agents and confirmation flow"""
 
     agents: List[BaseAgent]
     tasks: List[Task]
@@ -109,7 +111,7 @@ class AiopsAgenticAutomation:
     def github_requirements_agent(self) -> Agent:
         return Agent(
             config=self.agents_config["github_requirements_agent"],
-            tools=[get_human_input],
+            tools=self.get_mcp_tools() + [get_human_input],
             verbose=True,
         )
 
@@ -139,9 +141,8 @@ class AiopsAgenticAutomation:
         )
 
 
-# Example usage
 def main():
-    """Example of how to use the crew with proper delegation"""
+    """Example of how to use the crew with proper delegation and confirmation"""
     crew_instance = AiopsAgenticAutomation()
 
     print("🤖 Starting AI-Ops Service Selection...")
@@ -149,7 +150,6 @@ def main():
         "Available services: GitHub Repository Setup, Databricks Schema Creation, Databricks Compute Configuration"
     )
 
-    # Just run the crew - the guidance agent will handle delegation internally
     result = crew_instance.crew().kickoff()
 
     print("\n" + "=" * 60)

@@ -34,6 +34,8 @@ github_requirements_gathering_task:
   description: >
     Collect the following required information from the customer for GitHub repository setup:
     
+    STEP 1 - REQUIREMENTS GATHERING:
+    Collect these required fields:
     1. use_case_name: Ask for the name/title of their use case or project
     2. template: Help them select from available templates:
        - npus-aiml-mlops-stacks-template
@@ -52,15 +54,29 @@ github_requirements_gathering_task:
     - Ask for clarification if their input doesn't match valid options
     - Don't proceed until all fields have valid values
     
-    Once ALL required fields are collected with valid values, immediately delegate to the 
-    consolidator_agent with all the gathered requirements for final confirmation.
+    STEP 2 - CONFIRMATION FLOW:
+    Once ALL required fields are collected:
+    1. Present all gathered requirements in a clear, organized summary format
+    2. Ask the user to review and confirm if everything looks correct
+    3. If user wants to modify any field:
+       - Ask which field they want to update
+       - Collect the new value and validate it against allowed options
+       - Present the updated summary again
+    4. Repeat confirmation until user explicitly confirms all details are correct
+    5. ONLY after explicit user confirmation (like "yes", "confirm", "correct", "looks good"), 
+       execute the GitHub repository creation using your git tool
+    6. Present the final success message with repository details
     
-    Continue gathering information until all required fields are collected, then delegate.
+    IMPORTANT: Never proceed to repository creation without explicit user confirmation.
+    Always show the complete summary before asking for confirmation.
   expected_output: >
-    Complete delegation to consolidator_agent with all GitHub repository requirements:
-    - use_case_name: [customer provided name]
-    - template: [selected from: npus-aiml-mlops-stacks-template, npus-aiml-skinny-dab-template]
-    - internal_team: [selected from: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger]
-    - development_team: [selected from: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger, 'none']
-    - additional_team: [selected from: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger, 'none']
+    Complete GitHub repository setup including:
+    - All gathered and confirmed requirements:
+      * use_case_name: [customer provided name]
+      * template: [selected from: npus-aiml-mlops-stacks-template, npus-aiml-skinny-dab-template]
+      * internal_team: [selected from: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger]
+      * development_team: [selected from: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger, 'none']
+      * additional_team: [selected from: eai, deloitte, sig, tredence, bora, genpact, tiger, srm, kroger, 'none']
+    - Repository creation success message with URL and configuration details
+    - Confirmation that all team permissions have been properly configured
   agent: github_requirements_agent
