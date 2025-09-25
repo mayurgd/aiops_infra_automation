@@ -126,8 +126,8 @@ supervision_task:
       """
     
     PHASE 4 - EXECUTION:
-      ONLY after receiving explicit 'yes' confirmation, delegate to the appropriate specialized agents.
-      DO NOT trigger any tools or delegate tasks until explicit confirmation is received.
+      ONLY after receiving explicit 'yes' confirmation from the user for gathered inputs.
+      DO NOT trigger any tools until explicit confirmation is received.
     
     IMPORTANT RULES:
     - DO NOT create any resources until the user explicitly confirms with 'yes'
@@ -141,7 +141,7 @@ supervision_task:
     - Complete collection of all required inputs using structured questions
     - A formatted summary of all collected information
     - Explicit user confirmation before proceeding
-    - Only after confirmation: delegation to appropriate specialized agents
+    - Only after confirmation: trigger the appropriate tools to create the resources
     - Clear status updates throughout the process
 
   agent: supervisor_agent
