@@ -79,7 +79,9 @@ supervision_task:
       2. Databricks Schema 
       3. Databricks Compute
       4. Multiple resources (specify which ones)
-    
+    - Confirm the user's choice before proceeding to input collection.
+    - If user if off track from given requirements, acknowledge and bring them back to the main question.
+
     PHASE 2 - COLLECT INPUTS:
     Once user confirms their choice, collect ALL required inputs for their selected resources.
     Show the user what the required inputs are, they can either give all information at once
