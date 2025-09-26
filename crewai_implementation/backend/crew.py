@@ -40,16 +40,19 @@ def get_human_input(prompt: str, context: str = "") -> str:
     else:
         prompt_text = str(prompt)
 
-    crew_state["status"] = "waiting_input"
-    crew_state["prompt"] = prompt_text
-    crew_state["input_event"] = threading.Event()
+    if os.environ["LOCAL"]:
+        user_response = input(f"AGENT: {prompt_text}\nUSER:")
+    else:
+        crew_state["status"] = "waiting_input"
+        crew_state["prompt"] = prompt_text
+        crew_state["input_event"] = threading.Event()
 
-    # Wait for user input
-    crew_state["input_event"].wait()
+        # Wait for user input
+        crew_state["input_event"].wait()
 
-    user_response = crew_state["user_input"].strip()
-    crew_state["status"] = "running"
-    crew_state["prompt"] = None
+        user_response = crew_state["user_input"].strip()
+        crew_state["status"] = "running"
+        crew_state["prompt"] = None
 
     return user_response
 
