@@ -40,7 +40,7 @@ def get_human_input(prompt: str, context: str = "") -> str:
     else:
         prompt_text = str(prompt)
 
-    if os.environ["LOCAL"]:
+    if os.environ["TERMINAL"] == 'true':
         user_response = input(f"AGENT: {prompt_text}\nUSER:")
     else:
         crew_state["status"] = "waiting_input"
