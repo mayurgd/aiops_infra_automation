@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIOps Agentic Automation</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <button class="mobile-menu-btn" onclick="toggleSidebar()">☰</button>
+        
+        <!-- Left Navigation Sidebar -->
+        <div class="nav-sidebar" id="navSidebar">
+            <div class="nav-header">
+                <h1>AIOps Automation</h1>
+                <p>Intelligent Infrastructure Setup</p>
+            </div>
+
+            <div class="tool-section">
+                <h3>System Status</h3>
+                <div class="status-panel">
+                    <div id="statusIndicator" class="status-indicator status-idle">
+                        Status: Idle
+                    </div>
+                </div>
+            </div>
+
+            <div class="tool-section">
+                <h3>Actions</h3>
+                <button class="tool-btn" onclick="clearChat()">Clear Chat</button>
+                <button class="tool-btn" onclick="exportChat()">Export Chat</button>
+            </div>
+        </div>
+
+        <!-- Main Chat Container -->
+        <div class="chat-container">
+            <div class="chat-header">
+                <h2>AI Infrastructure Assistant</h2>
+                <p>Describe what you want to automate, and I'll help you set it up</p>
+            </div>
+
+            <div class="chat-messages" id="chatMessages">
+                <div class="message system">
+                    <div class="message-avatar">🤖</div>
+                    <div class="message-content">
+                        <strong>Welcome to AiOps Automation!</strong><br>
+                        I can help you set up GitHub repositories, Databricks schemas, and compute clusters. 
+                        Just tell me what you need in natural language.
+                        <div class="message-time" id="welcomeTime"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chat-input-area">
+                <div class="input-container">
+                    <textarea 
+                        id="chatInput" 
+                        class="chat-input auto-resize" 
+                        placeholder="Describe what you want to automate (e.g., 'Create a GitHub repo for my ML project')..."
+                        rows="1"
+                        onkeydown="handleKeyDown(event)"
+                        oninput="autoResize(this)"
+                    ></textarea>
+                    <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+                        <span id="sendIcon">➤</span>
+                        <div class="loading" id="sendLoader" style="display:none;"></div>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

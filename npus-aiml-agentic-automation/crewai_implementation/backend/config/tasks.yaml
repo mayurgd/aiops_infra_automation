@@ -1,0 +1,146 @@
+create_repo_task:
+  description: >
+    Create a GitHub repository with the following specifications:
+    - use_case_name: {use_case_name}
+    - template: {template}
+    - internal_team: {internal_team}
+    - development_team: {development_team}
+    - additional_team: {additional_team}
+
+    Use the create_github_repository tool to execute your tasks.
+    Monitor the creation process and report the final status.
+    If Inputs are invalid just respond to the user to provide correct inputs.
+  expected_output: >
+    A detailed report of the repository creation process including:
+    - Validation results
+    - Creation status
+    - Repository URL (if successful)
+    - Any errors encountered
+    - Next steps for the user
+  agent: git_repo_agent
+
+create_databricks_schema_task:
+  description: >
+    Create a Databricks catalog and schema with the following specifications:
+    - catalog: {catalog}
+    - schema: {schema}
+    - aiml_support_team: {aiml_support_team}
+    - aiml_use_case: {aiml_use_case}
+    - business_owner: {business_owner}
+    - internal_entra_id_group: {internal_entra_id_group}
+    - external_entra_id_group: {external_entra_id_group}
+
+    Use the create_databricks_schema tool to execute your tasks. 
+    Ensure proper permissions and access controls are set up.
+    If Inputs are invalid just respond to the user to provide correct inputs.
+  expected_output: >
+    A comprehensive report of the Databricks schema creation process including:
+    - Input validation results
+    - Schema creation status
+    - Catalog and schema details (if successful)
+    - Permission setup status
+    - Any errors encountered
+    - Access instructions for users
+  agent: databricks_schema_agent
+
+create_databricks_compute_task:
+  description: >
+    Create a Databricks compute cluster with the following specifications:
+    - cluster_name: {cluster_name}
+    - spark_version: {spark_version}
+    - driver_node_type_id: {driver_node_type_id}
+    - node_type_id: {node_type_id}
+    - min_workers: {min_workers}
+    - max_workers: {max_workers}
+    - data_security_mode: {data_security_mode}
+    - aiml_use_case: {aiml_use_case}
+
+    Use the create_databricks_compute tool to execute your tasks.
+    Ensure proper cluster configuration and resource allocation.
+    If Inputs are invalid just respond to the user to provide correct inputs.
+  expected_output: >
+    A comprehensive report of the Databricks compute cluster creation process including:
+    - Input validation results
+    - Cluster creation status
+    - Cluster configuration details (if successful)
+    - Resource allocation status
+    - Any errors encountered
+    - Access instructions for users
+  agent: databricks_compute_agent
+
+supervision_task:
+  description: >
+    Execute the complete automation workflow with these phases:
+    
+    PHASE 1 - DETERMINE REQUIREMENTS:
+    Ask the user what they want to create:
+    1. GitHub repository
+    2. Databricks Schema
+    3. Databricks Compute
+    4. Multiple resources (specify which ones)
+    Confirm the user's choice before proceeding.
+    
+    PHASE 2 - COLLECT INPUTS:
+    Collect ALL required inputs for the selected resources using get_human_input tool.
+    Show the user the required inputs and gather them step by step.
+    
+    PHASE 3 - CONFIRMATION:
+    Use format_summary tool to present all collected inputs in structured format.
+    Ask for explicit confirmation: "Do you want to proceed? (yes/no)"
+    
+    PHASE 4 - EXECUTION:
+    ONLY after 'yes' confirmation, execute the appropriate creation tools.
+    
+    ERROR HANDLING AND RETRY:
+    - If any tool fails, inform the user of the specific error
+    - Ask if they want to: 1) Retry with same inputs, 2) Modify inputs, 3) Cancel
+    - Do NOT exit the task until successful creation or explicit cancellation
+    - Loop and wait for user input if errors occur
+    - Maintain all collected data across retries
+    
+    IMPORTANT RULES:
+    - DO NOT create resources until explicit 'yes' confirmation
+    - Validate all required inputs before confirmation
+    - Stay in task until explicit 'cancel' or successful completion
+    - Provide clear status updates and next steps at each phase
+    - Handle all user responses gracefully
+    
+    REQUIRED INPUTS BY RESOURCE TYPE:
+    
+    GitHub Repository:
+    - use_case_name: Name for the repo
+    - template: Repository template to use
+    - internal_team: Internal team name
+    - development_team: Development team name
+    - additional_team: Any additional team
+    
+    Databricks Schema:
+    - catalog: Databricks catalog name
+    - schema: Schema name within the catalog
+    - aiml_support_team: AI/ML support team
+    - aiml_use_case: usecase name to create a tag
+    - business_owner: Business owner contact
+    - internal_entra_id_group: Internal Azure AD group
+    - external_entra_id_group: External Azure AD group
+    
+    Databricks Compute:
+    - cluster_name: Name for the compute cluster
+    - spark_version: Apache Spark version
+    - driver_node_type_id: Driver node instance type
+    - node_type_id: Worker node instance type
+    - min_workers: Minimum number of worker nodes
+    - max_workers: Maximum number of worker nodes
+    - data_security_mode: Security mode for data access
+    - aiml_use_case: usecase name to create a tag, default to cluster name if not provided
+  
+  name: supervision_task
+  expected_output: >
+    A successful workflow execution including:
+    - Clear determination of user requirements
+    - Complete collection of all required inputs
+    - Formatted summary of collected information with confirmation
+    - Successful resource creation or explicit error handling with retry logic
+    - Completion message with status of all resources
+    - Clear status updates and user guidance throughout
+  
+  agent: supervisor_agent
