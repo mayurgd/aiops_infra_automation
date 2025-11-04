@@ -1,4 +1,4 @@
-const API_BASE = 'http://127.0.0.1:8000';
+const API_BASE = 'http://127.0.0.1:8070';
 let statusCheckInterval;
 let currentStatus = 'idle';
 let messageHistory = [];
@@ -24,10 +24,46 @@ function handleKeyDown(event) {
     }
 }
 
-// Toggle sidebar for mobile
+// Toggle sidebar for both mobile and desktop
 function toggleSidebar() {
-    document.getElementById('navSidebar').classList.toggle('open');
+    const sidebar = document.getElementById('navSidebar');
+    const overlay = document.getElementById('sidebarOverlay');
+    const isMobile = window.innerWidth <= 768;
+    
+    if (isMobile) {
+        // Mobile behavior: slide in/out from left
+        sidebar.classList.toggle('open');
+        overlay.classList.toggle('active');
+    } else {
+        // Desktop behavior: collapse/expand
+        sidebar.classList.toggle('collapsed');
+    }
 }
+
+// Close sidebar (primarily for mobile overlay)
+function closeSidebar() {
+    const sidebar = document.getElementById('navSidebar');
+    const overlay = document.getElementById('sidebarOverlay');
+    
+    sidebar.classList.remove('open');
+    overlay.classList.remove('active');
+}
+
+// Handle window resize to maintain proper sidebar state
+window.addEventListener('resize', function() {
+    const sidebar = document.getElementById('navSidebar');
+    const overlay = document.getElementById('sidebarOverlay');
+    const isMobile = window.innerWidth <= 768;
+    
+    if (!isMobile) {
+        // Reset mobile classes when switching to desktop
+        sidebar.classList.remove('open');
+        overlay.classList.remove('active');
+    } else {
+        // Reset desktop classes when switching to mobile
+        sidebar.classList.remove('collapsed');
+    }
+});
 
 // Format timestamp
 function formatTime(date) {
@@ -336,7 +372,7 @@ async function checkServerHealth() {
         const data = await response.json();
         addMessage('system', `${data.message}`);
     } catch (error) {
-        addMessage('system', `❌ Server connection failed. Make sure the FastAPI server is running on port 8000.`, '⚠️');
+        addMessage('system', `❌ Server connection failed. Make sure the FastAPI server is running on port 8070.`, '⚠️');
     }
 }
 

@@ -99,7 +99,7 @@ class NestleLLM(BaseLLM):
             conn.close()
 
             if res.status != 200:
-                error_msg = data.get("error", {}).get("message", "Unknown error")
+                error_msg = str(data)
                 raise Exception(f"API error {res.status}: {error_msg}")
 
             return data["choices"][0]["message"]["content"]

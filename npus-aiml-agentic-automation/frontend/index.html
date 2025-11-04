@@ -8,7 +8,7 @@
 </head>
 <body>
     <div class="app-container">
-        <button class="mobile-menu-btn" onclick="toggleSidebar()">☰</button>
+        <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
         
         <!-- Left Navigation Sidebar -->
         <div class="nav-sidebar" id="navSidebar">
@@ -31,22 +31,28 @@
                 <button class="tool-btn" onclick="clearChat()">Clear Chat</button>
                 <button class="tool-btn" onclick="exportChat()">Export Chat</button>
             </div>
+             <div class="sidebar-logo-container">
+    <img src="purina.png" alt="Purina Logo">
+</div>
         </div>
 
         <!-- Main Chat Container -->
         <div class="chat-container">
             <div class="chat-header">
-                <h2>AI Infrastructure Assistant</h2>
-                <p>Describe what you want to automate, and I'll help you set it up</p>
+                <button class="mobile-menu-btn" onclick="toggleSidebar()">☰</button>
+                <div class="chat-header-content">
+                    <h2>MLOps Platform Onboarding Assistant</h2>
+                </div>
             </div>
 
             <div class="chat-messages" id="chatMessages">
                 <div class="message system">
                     <div class="message-avatar">🤖</div>
                     <div class="message-content">
-                        <strong>Welcome to AiOps Automation!</strong><br>
-                        I can help you set up GitHub repositories, Databricks schemas, and compute clusters. 
-                        Just tell me what you need in natural language.
+                        <strong>Welcome to MLOps Onboarding Site!</strong><br>
+                        I can help you with:<br>
+                        1. Onboarding a new use case onto the platform<br>
+                        2. Answering questions and Providing guidance on platform features.
                         <div class="message-time" id="welcomeTime"></div>
                     </div>
                 </div>
