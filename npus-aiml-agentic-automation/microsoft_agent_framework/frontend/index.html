@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIOps Agentic Automation</title>
+    <link rel="stylesheet" href="styles.css">
+    <!-- Add marked.js for markdown parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Add highlight.js for code syntax highlighting -->
+    <link rel="stylesheet href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+        
+        <!-- Left Navigation Sidebar -->
+        <div class="nav-sidebar" id="navSidebar">
+            <div class="nav-header">
+                <h1>AIOps Automation</h1>
+                <p>Intelligent Infrastructure Setup</p>
+            </div>
+
+            <div class="tool-section">
+                <h3>System Status</h3>
+                <div class="status-panel">
+                    <div id="statusIndicator" class="status-indicator status-idle">
+                        Status: Idle
+                    </div>
+                </div>
+            </div>
+
+            <div class="tool-section">
+                <h3>Actions</h3>
+                <button class="tool-btn" onclick="clearChat()">Clear Chat</button>
+                <button class="tool-btn" onclick="exportChat()">Export Chat</button>
+            </div>
+             <div class="sidebar-logo-container">
+    <img src="purina.png" alt="Purina Logo">
+</div>
+        </div>
+
+        <!-- Main Chat Container -->
+        <div class="chat-container">
+            <div class="chat-header">
+                <button class="mobile-menu-btn" onclick="toggleSidebar()">☰</button>
+                <div class="chat-header-content">
+                    <h2>MLOps Platform Onboarding Assistant</h2>
+                </div>
+            </div>
+
+            <div class="chat-messages" id="chatMessages">
+                <div class="message system">
+                    <div class="message-avatar">🤖</div>
+                    <div class="message-content">
+                        <strong>Welcome to MLOps Onboarding Site!</strong><br>
+                        I can help you with:<br>
+                        1. Onboarding a new use case onto the platform<br>
+                        2. Answering questions and Providing guidance on platform features.
+                        <div class="message-time" id="welcomeTime"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chat-input-area">
+                <div class="input-container">
+                    <textarea 
+                        id="chatInput" 
+                        class="chat-input auto-resize" 
+                        placeholder="Type your message..."
+                        rows="1"
+                        onkeydown="handleKeyDown(event)"
+                        oninput="autoResize(this)"
+                    ></textarea>
+                    <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+                        <span id="sendIcon">➤</span>
+                        <div class="loading" id="sendLoader" style="display:none;"></div>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
